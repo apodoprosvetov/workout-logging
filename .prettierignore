@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+.next/
+coverage/
+package-lock.json
+
+# Spec-kit tooling and hand-authored spec docs — not app code
+.claude/
+.specify/
+specs/

@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.next/
+*.tsbuildinfo
+
+# Environment (secrets, FR-019) — .env.example is the tracked template, kept
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+
+# Terraform (specs/002-deployment-cicd) — state can contain sensitive values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+crash.log
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,220 @@
+---
+
+description: "Task list for Workout Logging MVP"
+---
+
+# Tasks: Workout Logging MVP
+
+**Input**: Design documents from `/specs/001-workout-logging-mvp/`
+
+**Prerequisites**: [plan.md](./plan.md), [spec.md](./spec.md), [research.md](./research.md), [data-model.md](./data-model.md), [contracts/](./contracts/), [quickstart.md](./quickstart.md)
+
+**Tests**: Not originally requested in spec.md (no TDD ask), but revised during T026: every apps/api route now gets a permanent contract test alongside it (Vitest + Supertest, real Postgres/Mongo via docker-compose, per plan.md's "no mocking the databases" stance — apps/api/tests/contract/*.spec.ts, shared harness in apps/api/tests/helpers/test-app.ts). Not retroactive to already-completed tasks unless noted. `quickstart.md` remains the end-to-end acceptance validation on top of these. True mocked unit tests are explicitly deferred to a future CI/CD setup, not part of this task list.
+
+**Organization**: Tasks are grouped by user story (from spec.md, priority order P1→P4) to enable independent implementation and testing of each story.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: Can run in parallel (different files, no dependencies)
+- **[Story]**: Which user story this task belongs to (US1–US4)
+- File paths follow the monorepo structure from plan.md: `apps/web`, `apps/api`, `apps/worker`, `packages/shared`
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: Project initialization and basic structure
+
+- [X] T001 Create monorepo directory structure per plan.md Project Structure: `apps/web/`, `apps/api/`, `apps/worker/`, `packages/shared/`
+- [X] T002 Initialize root workspace config (npm/pnpm workspaces `package.json`, base `tsconfig.json`) at repository root
+- [X] T003 [P] Initialize `apps/api` package with NestJS (`@nestjs/core`, `@nestjs/common`, `@nestjs/platform-fastify`, `@nestjs/config`), TypeORM (`@nestjs/typeorm`, `typeorm`, `pg`), Mongoose (`@nestjs/mongoose`, `mongoose`), `class-validator`, `class-transformer`, `ioredis`, `amqplib`, `jsonwebtoken`, `argon2`, `@anthropic-ai/sdk` in apps/api/package.json per research.md #1 (Revision note)
+- [X] T004 [P] Initialize `apps/worker` package with amqplib, TypeORM (`typeorm`, `pg`), Mongoose (`mongoose`), ioredis, @anthropic-ai/sdk in apps/worker/package.json (no NestJS — worker has no HTTP surface; shares its model layer with apps/api via packages/shared instead, per research.md #1 "Data-layer uniformity")
+- [X] T005 [P] Initialize `apps/web` Next.js (App Router, TypeScript) project with Tailwind CSS v4 in apps/web/
+- [X] T006 [P] Initialize `packages/shared` TypeScript package (CommonJS output, `typeorm`, `mongoose`, `pg`, `reflect-metadata`, `ioredis`, `amqplib`) in packages/shared/package.json
+- [X] T007 [P] Configure ESLint + Prettier for the workspace in eslint.config.mjs (flat config, not .eslintrc.cjs — ESLint 9 + eslint-config-next in apps/web is flat-config-only) and .prettierrc
+- [X] T008 [P] Configure Vitest + Supertest test runner for apps/api and apps/worker in vitest.config.ts (apps/api's config uses `unplugin-swc` since Vitest's default esbuild transform can't emit the `emitDecoratorMetadata` NestJS DI needs — see research.md #1; verified with a throwaway DI smoke test, removed after confirming)
+- [X] T009 Create docker-compose.yml with Postgres, MongoDB, Redis, RabbitMQ services at repository root (all four verified healthy + reachable: psql, mongosh ping, redis-cli ping, RabbitMQ management API)
+- [X] T010 [P] Create .env.example documenting required secrets (JWT_SECRET, DATABASE_URL, MONGO_URL, REDIS_URL, RABBITMQ_URL, TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY) per FR-019 — connection strings verified consistent with docker-compose.yml's default credentials (T009)
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
+
+**⚠️ CRITICAL**: No user story work can begin until this phase is complete
+
+- [X] T011 [P] Define shared event payload types (`workout.uploaded`, `workout.parsed`) in packages/shared/src/events/types.ts per contracts/events.md — verified cross-package: apps/worker (ESM) imports the built CommonJS output correctly, both at runtime and type-checked
+- [X] T012 [P] Define shared Mongoose schemas (RawUpload, ExerciseCatalog) in packages/shared/src/schemas/*.schema.ts per data-model.md, consumed by apps/api via @nestjs/mongoose forFeature() and by apps/worker via a standalone mongoose.connect() (research.md #1) — verified at runtime: the "at least one of text/image_ref" rule (research.md #8) rejects/accepts correctly, including the both-present case
+- [X] T013 Define shared TypeORM entities (User, RefreshToken, TelegramLinkCode, Workout, WorkoutExercise, Set, Exercise, ProcessedEvent) in packages/shared/src/entities/*.entity.ts and generate the initial TypeORM migration in packages/shared/src/db/migrations/ per data-model.md, consumed by apps/api via @nestjs/typeorm forFeature() and by apps/worker via a standalone DataSource (research.md #1) — verified against a live Postgres: migration up/down/up, full TypeORM CRUD + relation-loading round-trip, SnakeNamingStrategy column mapping. Also produced packages/shared/src/db/typeorm.ts (T014's file), largely fulfilling T014 as a side effect
+- [X] T014 [P] Implement a TypeORM DataSource factory (registering the shared entities from T013) in packages/shared/src/db/typeorm.ts — used by apps/api's TypeOrmModule.forRoot() and by apps/worker's standalone DataSource.initialize() — built as a byproduct of T013; both consumption paths now verified end-to-end against live Postgres (worker's standalone DataSource in T013, apps/api's TypeOrmModule.forRoot() + repository injection here)
+- [X] T015 [P] Implement a Mongoose connection factory (registering the shared schemas from T012) + index setup (raw_uploads, exercise_catalog) in packages/shared/src/db/mongoose.ts — used by apps/api's MongooseModule.forRoot() and by apps/worker's standalone mongoose.connect() — added the aliases index research.md #7's lookup actually needs; both consumption paths verified end-to-end against live MongoDB (worker's createMongooseConnection(), apps/api's MongooseModule.forRoot() + injected model)
+- [X] T016 [P] Implement Redis client factory in packages/shared/src/db/redis.ts — verified against live Redis (set/get, INCR rate-limit-counter pattern)
+- [X] T017 Implement RabbitMQ topology setup (workout.events topic exchange, workout.parse.q, workout.analytics.q, retry queues with TTL, workout.dlq) in packages/shared/src/events/rabbitmq.ts per research.md #3 — verified against live RabbitMQ: full publish → consume → simulated-failure → republish-to-retry-tier → wait out the real 5s TTL → confirmed dead-letter-back-to-primary-queue (with x-death header) → DLQ round trip; topology also inspected via the management API
+- [X] T018 [P] Implement processed_events idempotency helper (insert-or-skip by event_id, via the shared ProcessedEvent TypeORM entity/repository) in packages/shared/src/db/idempotency.ts per research.md #4 — verified against live Postgres: fresh event runs work once, duplicate event_id skips work entirely, a failing work rolls back the event_id insert too (so the retry/backoff flow in T032 isn't permanently blocked), and a retry after that rollback runs work again
+- [X] T019 [P] Implement Redis-backed sliding-window rate-limiter helper in packages/shared/src/rate-limit.ts — atomic Lua-script sliding-window-log (ZSET), plus named FR-018/FR-005 wrappers (checkIngestRateLimit, checkLinkCodeRateLimit). Verified against live Redis: sequential admit/reject, window-expiry reset, and — the property that actually matters here — 10 concurrent requests against limit=5 admitted exactly 5, confirming the Lua script is genuinely atomic under concurrency
+- [X] T020 Implement argon2 password hashing + JWT access-token issue/verify + refresh-token issue/rotate helpers as a Nest provider in apps/api/src/auth/auth-tokens.service.ts per research.md #6 — resolved a real gap in the original decision (argon2's salted hash can't be looked up directly; added a selector/validator split using the existing refresh_tokens.id, documented in research.md #6). Added apps/api/src/auth/auth.module.ts (@nestjs/jwt via ConfigService, TypeOrmModule.forFeature([RefreshToken])). Verified against live Postgres: password hash/verify, access-token sign/verify (+ rejects garbage), and — the property that actually matters for refresh rotation — canreusing an already-rotated token is correctly rejected
+- [X] T021 Implement a Nest Bearer-JWT auth guard (attaches authenticated user_id to the request, rejects otherwise) in apps/api/src/auth/jwt-auth.guard.ts — registered on AuthModule (providers+exports) alongside AuthTokensService; added `fastify` as an explicit apps/api dependency (was only phantom/hoisted before). Verified over real HTTP via Fastify's `.inject()` against a bootstrapped Nest app (not a mocked ExecutionContext): missing header, malformed header, and invalid token all 401; a genuinely valid token returns 200 with the correct userId attached to the request
+- [X] T022 [P] Seed MongoDB exercise_catalog (via Mongoose) with initial exercises, aliases, and muscle_groups in apps/api/src/db/seed-exercise-catalog.ts — 20 common exercises across all major muscle groups with alias coverage for research.md #7's matching; upsert-by-slug (idempotent, safe to re-run). Run via `npm run seed:exercises`. Verified against live Mongo: seeded, alias lookup works, re-run doesn't duplicate (still 20 after a second run)
+- [X] T023 Wire apps/api NestJS bootstrap (FastifyAdapter, env config via @nestjs/config, TypeOrmModule.forRoot()/MongooseModule.forRoot() using the shared factories from T014/T015, global ValidationPipe using class-validator DTOs, global exception filter) in apps/api/src/main.ts and apps/api/src/app.module.ts — found and fixed a real bug along the way: apps/api's tsconfig had `incremental: true`, and its stale .tsbuildinfo cache caused `nest build`/`tsc` to silently emit nothing (exit 0, no error) after dist/ was deleted; removed `incremental` to eliminate the whole class of silent-stale-build risk. App verified booting for real against live Postgres+MongoDB and serving real HTTP: 404 passthrough, ValidationPipe (valid passes, constraint violation 400, forbidNonWhitelisted 400 on unexpected fields), and the global exception filter (unhandled error -> generic 500 to the client, full stack trace logged server-side)
+- [X] T024 [P] Wire apps/worker bootstrap (TypeORM DataSource.initialize() + mongoose.connect() using the shared factories from T014/T015, RabbitMQ connection, consumer registration, graceful shutdown) in apps/worker/src/index.ts — consumer registration built as an extension point (empty `consumers[]` array) since T031/T047's handlers don't exist yet; each will push its own registration. Verified against the live stack: connects to Postgres+Mongo+RabbitMQ (topology asserted), and SIGTERM triggers a clean shutdown — confirmed via the RabbitMQ management API that the connection actually closes (0 active connections after), not just that the process exits. **Follow-up fix**: running under the root `npm run dev` (concurrently + tsx watch) exposed that a duplicate SIGINT (tsx watch forwards its own) crashed the shutdown handler with `IllegalOperationError: Channel closing` — the original single-SIGTERM test never hit this. Added a `shuttingDown` guard so the handler is idempotent; reverified under the exact failing scenario
+- [X] T025 [P] Scaffold apps/web API client (fetch wrapper attaching Bearer token, auto-refresh on 401) in apps/web/lib/api-client.ts — dedupes concurrent refresh calls (refresh tokens rotate on use, T020, so parallel refreshes would race each other). Verified against a real running apps/api (temporary controller reusing the actual AuthTokensService/JwtAuthGuard from T020/T021, removed after): valid token passes straight through, an invalid access token triggers exactly one auto-refresh+retry and the refresh token genuinely rotates, 5 concurrent 401s trigger exactly 1 refresh call (not 5 — the property the dedup logic exists for), and a fully-invalid refresh token correctly 401s and clears stored tokens
+
+**Checkpoint**: Foundation ready — user story implementation can now begin
+
+---
+
+## Phase 3: User Story 1 - Log a workout as text and see it structured (Priority: P1) 🎯 MVP
+
+**Goal**: A person registers, submits a free-text workout, and sees it correctly parsed into exercises/sets in their history.
+
+**Independent Test**: Register via the web app, `POST /workouts` with only `text` set, confirm `GET /workouts/:id` shows correct exercises and sets (quickstart.md Story 1).
+
+### Implementation for User Story 1
+
+- [X] T026 [P] [US1] Implement POST /auth/register (controller method + DTO + service logic) in apps/api/src/auth/auth.controller.ts, apps/api/src/auth/dto/register.dto.ts, apps/api/src/auth/auth.service.ts per contracts/api.md — email uniqueness enforced by catching the DB's unique-violation on insert (not a findOneBy pre-check, which would leave a register/register race open); promoted `isUniqueViolation` out of T018's idempotency helper into a shared `packages/shared/src/db/pg-errors.ts` utility for reuse here. Verified against live Postgres over real HTTP: 201 with correct shape, 409 on duplicate email, 400 on invalid email/short password, password stored as a real argon2id hash (not plaintext), and the returned access_token's `sub` + refresh_token's selector.validator shape both genuinely correct. Also added a permanent contract test, apps/api/tests/contract/auth.register.spec.ts (+ shared harness apps/api/tests/helpers/test-app.ts) — see the Tests note above; root `npm test` now orchestrates per-workspace (was silently running apps/api's specs through the wrong transform, no SWC plugin → NestJS DI failures — fixed to `npm run test --workspaces --if-present`)
+- [X] T027 [P] [US1] Implement POST /auth/login (controller method + DTO + service logic) in apps/api/src/auth/auth.controller.ts, apps/api/src/auth/dto/login.dto.ts, apps/api/src/auth/auth.service.ts per contracts/api.md — user had started this manually; found and fixed one bug (login() threw ConflictException/409 for bad credentials instead of UnauthorizedException/401 per contracts/api.md). LoginDto correctly omits RegisterDto's @MinLength(8) — login must accept whatever password was valid at registration time, not today's rules. Added apps/api/tests/contract/auth.login.spec.ts (6 tests: success, wrong password, unknown email, invalid email format, missing password, token sanity) — 12/12 passing alongside T026's tests, run twice for repeatability, DB clean after
+- [X] T028 [US1] Implement POST /auth/refresh route (rotate refresh token) in apps/api/src/auth/auth.controller.ts + apps/api/src/auth/auth.service.ts per contracts/api.md — added apps/api/src/auth/dto/refresh.dto.ts (`refresh_token` field, snake_case to match the wire body). Added apps/api/tests/contract/auth.refresh.spec.ts (7 tests: rotation, reuse-rejection, rotation-chaining, invalid/unknown token, missing field, access-token sub sanity) — 19/19 passing across all three auth contract tests, run twice for repeatability, both users and refresh_tokens tables clean after (confirms FK cleanup works even with rotated tokens)
+- [X] T029 [US1] Implement ingestion service (accepts `{ text?, imageBuffer? }`, at least one required; create `pending` workout row via TypeORM with has_text/has_image, store raw text (and image_ref once T042 lands) in MongoDB raw_uploads via Mongoose, publish `workout.uploaded`) in apps/api/src/workouts/ingestion.service.ts per research.md #8 — also built apps/api's first RabbitMQ publisher (apps/api/src/events/{rabbitmq-publisher.service,events.module}.ts, reusing T017's shared topology setup) since publishing requires apps/api to hold its own broker connection, distinct from apps/worker's. Added apps/api/tests/integration/ingestion.service.spec.ts. Two real bugs found and fixed during verification (both in the test, not the service): (1) `Test.createTestingModule().compile()` doesn't run `OnModuleInit` hooks — needed `moduleRef.init()` for the publisher's channel to actually open, since AuthModule's earlier tests never exercised a lifecycle hook so this never surfaced before; (2) initial cleanup only deleted rows if the test recorded their IDs after full success, leaking rows on a mid-test failure — rewrote to delete by user_id unconditionally in afterAll. Verified end-to-end twice: Postgres row (has_text/has_image/status/source), Mongo raw_uploads doc, and the actual event landing on the live workout.parse.q queue with correct workout_id/user_id/raw_upload_ref — all four stores (Postgres, Mongo, RabbitMQ) confirmed empty after
+- [X] T030 [US1] Implement POST /workouts route (multipart: optional `text` field + optional `image` file + optional `performed_at`; rate-limited via T019, acks in <2s per FR-009/SC-002) in apps/api/src/workouts/workouts.controller.ts per contracts/api.md — single ingestion endpoint for text and/or photo (research.md #8); the `image` field is accepted here but only stored/parsed once T042/T044 land. Registered `@fastify/multipart` (keyValues mode — text fields become plain values, files become Buffers, so a normal class-validator DTO works). Built apps/api's first Redis-backed guard (IngestRateLimitGuard, wraps T019's checkIngestRateLimit) and RedisModule. Found and fixed two real wiring bugs: (1) WorkoutsModule never imported AuthModule despite WorkoutsController depending on JwtAuthGuard→AuthTokensService — would have crashed the real app on boot, not just tests, since Nest doesn't share providers between sibling modules automatically; (2) the shared test harness (createTestApp) never wired MongooseModule.forRoot(), working only by accident because no earlier contract test touched Mongo. Verified via 6 contract tests (202 + timing, real Postgres/Mongo/queue side effects, 401, 400×2, and a genuine 31-request run confirming the 30/min limit 429s on request 31) plus a live running-server check over real HTTP (not just TestingModule) — all four stores confirmed empty after. **Post-hoc revision (research.md #11)**: the single `image` field became repeatable `images` (max `MAX_WORKOUT_IMAGES`=10, see T042's note) — `@fastify/multipart`'s keyValues mode hands back a bare Buffer for one file but an array for 2+, normalized via a `class-transformer` `@Transform` in the DTO
+- [X] T031 [US1] Implement parser worker handler: consume workout.parse.q, dedupe via T018, fetch the raw_uploads doc and call Claude with whichever of text/image are present (text-only in this phase — T044 adds the image/vision branch) to extract exercises/sets, resolve names against exercise_catalog aliases, upsert exercises table, write workout_exercises + sets, set workout status (parsed/needs_review), publish workout.parsed in apps/worker/src/parser/handler.ts per research.md #3-#4, #7-#8 — found the configured ANTHROPIC_API_KEY was actually a DeepSeek key (real Anthropic call 401s); switched to DeepSeek's Anthropic-compatible endpoint per user decision, documented in research.md #9 (incl. the extended-thinking tool_choice constraint this model has). apps/worker/src/parser/{claude,exercise-matcher}.ts. Verified against live Postgres+MongoDB+RabbitMQ with 2 real API calls per run: matched-exercise happy path (parsed status, correct exercises/sets, workout.parsed published with right exercise_count), unmatched-exercise needs_review (still recorded, not blocked), and idempotent redelivery (no duplicate rows) — run twice, all four stores clean after both runs. **Post-hoc refinement (research.md #10)**: extended `record_workout`'s tool schema to also extract an embedded `name`/`performed_at` from the raw text when literally present (not inferred), with a `workouts.performed_at_explicit` column so a caller-supplied `performed_at` always wins over an extracted one — verified against the user's real Ukrainian-language example ("Низ А - 09.08.2026"). **Second post-hoc refinement**: `weight` is now documented in the tool schema as 0 for bodyweight-only sets (was ambiguous, risked hallucinated weights or dropped sets) — verified with a real "Підйом ніг у висі: Сет 1: 8 повторень" (no weight mentioned) call, records weight 0. **Reliability fix (research.md #9)**: found DeepSeek sometimes returns `tool_use` with empty `input: {}` (~1/3 of calls in a small sample) despite reasoning correctly in its thinking block — `extractWorkoutFromText` now throws on this instead of silently treating it as zero exercises, routing it through T032's retry/DLQ path; reproduced live during a test run and confirmed it self-heals on retry
+- [X] T032 [US1] Implement parser retry/backoff + DLQ handling, marking workout `failed` after 3 attempts, in apps/worker/src/parser/retry.ts per research.md #3 — refactored attemptNumber into an explicit (defaulted) parameter after discovering RabbitMQ strips a client-supplied x-death header on a plain publish (broker-managed, can't be forged), which had been silently crashing the test's channel via an invalid ack on a hand-built message. Verified: first failure routes to the 5s retry tier, an exhausted 4th failure routes to workout.dlq and marks the workout failed, and — the actual production code path — getDeathCount correctly reads a genuine broker-populated x-death header after a real 5s TTL round trip
+- [X] T033 [P] [US1] Implement GET /workouts route (paginated, scoped to caller per FR-015) in apps/api/src/workouts/workouts.controller.ts — new WorkoutsService (apps/api/src/workouts/workouts.service.ts — named generically, not "Query", to leave room for delete/patch/a manual non-AI-ingested create later; kept separate from IngestionService, which is specifically the async raw-text/image→AI-parse pipeline) + ListWorkoutsQueryDto (`status?`, `limit?` default 20/max 100, `before?` ISO8601, sorted/paginated by `performedAt` desc, not `createdAt` — revised post-hoc since what matters for a workout list is when it happened, not when it was uploaded; a backlogged entry should sort by its real date). Verified via 7 contract tests (401, own-workouts-only/newest-first-by-performedAt with a second user's workout seeded to prove FR-015 scoping, status filter, limit, before-cursor by performedAt, 400 on bad status, 400 on limit>100) plus a live end-to-end HTTP run (real DeepSeek parse of the user's own "Низ А - 09.08.2026" example, visible correctly in the response)
+- [X] T034 [P] [US1] Implement GET /workouts/:id route (404, not 403, for other users' workouts) in apps/api/src/workouts/workouts.controller.ts — `ParseUUIDPipe` on the path param (400 for a malformed id, not a crash); query joins workout_exercises→exercises and sets, ordered by exercise_order/set_order. Verified via 5 contract tests (401, full ordered exercises/sets shape for the owner, 404 for another user's real workout id, 404 for a nonexistent-but-valid uuid, 400 for a malformed id) plus the same live HTTP run — `needs_review` correctly shown with the unmatched "Squats" exercise still recorded (research.md #7), not discarded. **Post-hoc**: ran EXPLAIN/EXPLAIN ANALYZE on T033/T034's exact generated SQL — found none of `workout_exercises.workout_id` / `sets.workout_exercise_id` / `workouts(user_id, performed_at)` had an index (TypeORM doesn't index FK columns automatically); added all three via `@Index()` on the entities + migration `AddIndexesForWorkoutReadPaths`. Verified against a synthetic 500-workout/1000-workout_exercises/3000-sets seed (cleaned up after): the detail query now uses `Bitmap Index Scan`/`Index Scan` on both new FK indexes instead of seq-scanning the whole table, and the list query does an `Index Scan Backward` on the composite index — satisfies `WHERE user_id = ... ORDER BY performed_at DESC` directly from the index, no separate sort step
+- [X] T035 [US1] Implement apps/web register/login pages in apps/web/app/(auth)/register/page.tsx and apps/web/app/(auth)/login/page.tsx — shared client-component `AuthForm` (apps/web/app/(auth)/auth-form.tsx, parameterized by `mode`) since both forms are structurally identical (email/password/submit/error), differing only in endpoint/copy/redirect-link. Added `apiFetchPublic` to lib/api-client.ts for these two specifically — they're unauthenticated, and a 401 from bad login credentials must NOT trigger apiFetch's refresh-and-retry logic (that's for an expired caller token, a different situation). UI copy in English (explicit user choice this session). **Real bug found and fixed while testing in a browser context, not just curl**: apps/api had no CORS configured at all — a real browser at :3001 calling :3000 would be blocked outright (curl doesn't enforce CORS, so earlier curl-only verification never caught this). Added `app.enableCors()` in apps/api/src/main.ts (needed `@fastify/cors`, not installed until now) gated by a new `WEB_ORIGIN` env var. Verified: `next build` typechecks clean (confirms Next 16's typed-route `PageProps`/route-group conventions still hold — `(auth)/register` and `(auth)/login` resolve to `/register`/`/login` as expected); a real preflight OPTIONS + real POST from Origin `http://localhost:3001` against a live apps/api now both carry `access-control-allow-origin` (404'd/missing before the fix); full register → wrong-password 401 → correct-password 200-with-tokens flow verified over real HTTP. **Not verified**: actual in-browser DOM interaction (typing, clicking, the client-side redirect) — no browser-automation tool available in this session, only network-level and SSR-HTML verification
+- [X] T036 [US1] Implement apps/web workout history list + detail view in apps/web/app/dashboard/page.tsx and apps/web/app/workouts/[id]/page.tsx — detail page is a thin async Server Component wrapper (unwraps Next 16's `PageProps<'/workouts/[id]'>` Promise `params`) around a client component (`workout-detail.tsx`) that does the actual browser-token-authenticated fetch; dashboard is a plain client component (no dynamic params needed). Shared `lib/workouts.ts` (response types + status-label/badge/date formatting, mirrors contracts/api.md exactly — apps/web doesn't import packages/shared, per plan.md's "only talks to apps/api over HTTP") and `lib/use-require-auth.ts` (client-side auth guard, reused by both pages). **Found and fixed a real lint-flagged issue, not a suppression**: `useRequireAuth` originally used `useState`+`useEffect` to sync with `localStorage`, which `eslint-plugin-react-hooks` v7's `set-state-in-effect` rule flags — its own diagnostic recommends `useSyncExternalStore` for exactly this "external mutable data source" case, so rewrote it that way (also picks up cross-tab logout via the native `storage` event, which the old version didn't). The dashboard/detail pages' data-fetch-on-mount effects are the same rule's "no data-fetching library in this project" case with no drop-in fix — scoped `eslint-disable-next-line` with rationale, not a blanket rule disable. Verified against a live full stack (api+worker+web): SSR HTML for /dashboard renders nothing before the client auth check resolves (no protected-content flash); real register → empty list → log workout → poll to `parsed` → GET /workouts and GET /workouts/:id both return exactly the shape the pages render; 404 for a nonexistent id confirmed matches the notFound UI state
+- [X] T037 [US1] Implement apps/web "log workout as text" form calling POST /workouts (text field only) in apps/web/app/dashboard/log-text-form.tsx — textarea + optional `<input type="date">` (performed_at), submits as `FormData` via `apiFetch` (not `apiJson`/`JSON.stringify` — POST /workouts is multipart, T030's `@fastify/multipart` keyValues mode; no manual content-type header, so fetch sets the correct multipart boundary itself), calls an `onLogged` callback on success so the parent list refetches. Wired into dashboard/page.tsx (T036) above the history list, plus a manual "Refresh" button next to it — without it there was no way to see a `pending` entry flip to `parsed` without a full page reload, since neither T036 page auto-polls (out of scope for either task; a real improvement, not scope creep, since the form is otherwise a dead end UX-wise). US1 is now fully closed. Verified against a live full stack: empty text correctly 400s (matches the form's own required-field guard, but also confirmed server-side); a real submission with `performed_at=2026-08-01` (date-only, exactly what `<input type="date">` produces) round-trips through `IsISO8601` and comes back correctly as `2026-08-01T00:00:00.000Z` on the parsed workout
+
+**Checkpoint**: User Story 1 is fully functional and independently testable (quickstart.md Story 1)
+
+---
+
+## Phase 4: User Story 2 - Log a workout from Telegram at the gym (Priority: P2)
+
+**Goal**: A person links Telegram via a one-time code and logs workouts by messaging the bot.
+
+**Independent Test**: Generate a linking code, send `/start <code>` to the bot, send a text workout, confirm it appears in the web dashboard (quickstart.md Story 2).
+
+### Implementation for User Story 2
+
+- [ ] T038 [P] [US2] Implement POST /telegram/link-code route (rate-limited via T019, 5/hour per FR-005) in apps/api/src/telegram/telegram.controller.ts per contracts/api.md
+- [ ] T039 [US2] Implement POST /telegram/webhook route: `/start <code>` linking (binds chat_id, invalidates code per FR-004), unlinked-chat reply (FR-006), routes linked-chat text messages into the ingestion service (T029) in apps/api/src/telegram/telegram.controller.ts
+- [ ] T040 [P] [US2] Implement Telegram send-message helper as a Nest provider in apps/api/src/telegram/telegram-bot.service.ts
+- [ ] T041 [P] [US2] Implement apps/web "generate Telegram linking code" UI in apps/web/app/dashboard/settings/page.tsx
+
+**Checkpoint**: User Stories 1 AND 2 both work independently (quickstart.md Story 2)
+
+---
+
+## Phase 5: User Story 3 - Log a workout from a photo or screenshot (Priority: P3)
+
+**Goal**: A person uploads a photo/screenshot (web or Telegram, optionally with an accompanying text note/caption in the same submission) and it's parsed using both, via the same `POST /workouts` endpoint as Story 1 (research.md #8).
+
+**Independent Test**: Upload a photo via web or Telegram, confirm the resulting structured workout matches the photo; also send a Telegram photo with a caption, confirm both the caption and the photo are reflected in the parsed workout (quickstart.md Story 3).
+
+### Implementation for User Story 3
+
+- [X] T042 [US3] Extend ingestion service's image handling: accept the multipart `images` files from T030 (via `@fastify/multipart`), store each in `raw_uploads.image_refs` alongside any `text` already captured (no size/format validation per spec.md Clarifications Q4) in apps/api/src/workouts/ingestion.service.ts — **implemented ahead of sequence** while resolving the multi-image redesign (research.md #11), together with T030's revision, since the original single-image design 500'd on any image-only submission (a real, previously-untested bug: `raw_uploads`'s "at least one of text/image_ref" Mongoose validator always failed because nothing ever populated `image_ref`). Built as GridFS storage (`packages/shared/src/db/gridfs.ts`, bucket `workout_images`) rather than a naive inline ref, with transient deletion once a workout reaches a terminal status (see T031/T032's post-hoc notes) — not the durable "retained indefinitely" storage originally implied, since FR-020 was revised for images specifically. Verified: 3 real multipart images produce 3 real GridFS files (queried directly); has_image is set correctly; a full GridFS bucket census after the whole apps/api + apps/worker suites shows zero orphaned files/chunks
+- [ ] T043 [US3] Add request validation ensuring at least one of `text` / `images` is present on POST /workouts (400 otherwise, per research.md #8 / data-model.md validation rules) in apps/api/src/workouts/dto/create-workout.dto.ts — note: this 400 already exists today (implemented in T029, service-level, not DTO-level as originally scoped here); what remains for this task specifically is only a cross-field DTO validator, if that's still wanted
+- [ ] T044 [US3] Extend parser worker's image/vision branch: when `raw_uploads.image_refs` is present (now possibly several — research.md #11), fetch each from GridFS and include it in the Claude call as a vision content block — combined with any `text` in the same single request when both are present (research.md #8) — in apps/worker/src/parser/handler.ts. Must run *before* the existing post-terminal-status GridFS cleanup (handler.ts's cleanup already added, research.md #11) — read the images first, then clean up
+- [ ] T045 [US3] Extend Telegram webhook to accept photo messages (capturing the photo's caption as `text` in the same call, per research.md #8) and route them into the ingestion service (as `images`, plural — research.md #11) in apps/api/src/telegram/telegram.controller.ts — **note for whoever picks this up**: Telegram sends each photo of an album as a *separate* update sharing one `media_group_id`, not as one atomic update with multiple photos — needs a short debounce buffer (e.g. accumulate by `media_group_id`, flush after ~1.5s of no new photo in the group) before calling into the ingestion service once per album, not once per photo. Not designed in detail yet — raised by the user (research.md #11) but genuinely deferred, since Telegram itself (T038-T041) isn't built yet either
+- [ ] T046 [P] [US3] Implement apps/web "upload photo" control in apps/web/app/dashboard/log-photo-form.tsx — multi-file input (up to `MAX_WORKOUT_IMAGES`=10, research.md #11), not single-file as originally scoped
+
+**Checkpoint**: All three logging paths (text/web, text/Telegram, photo) are independently functional (quickstart.md Story 3)
+
+---
+
+## Phase 6: User Story 4 - See weekly progress per muscle group (Priority: P4)
+
+**Goal**: A person sees workout history and a weekly-volume-per-muscle-group chart on the dashboard.
+
+**Independent Test**: Log workouts across muscle groups, confirm the dashboard chart reflects them within seconds of parsing (quickstart.md Story 4).
+
+### Implementation for User Story 4
+
+- [ ] T047 [US4] Implement analytics worker handler: consume workout.analytics.q, dedupe via T018, aggregate sets by muscle_group for the ISO week, update the Redis `weekly_volume` hash (FR-016) in apps/worker/src/analytics/handler.ts
+- [ ] T048 [US4] Implement GET /analytics/weekly-volume route (Redis-first, Postgres fallback via TypeORM on cache miss per FR-016) in apps/api/src/analytics/analytics.controller.ts per contracts/api.md
+- [ ] T049 [P] [US4] Implement apps/web weekly volume chart component in apps/web/app/dashboard/volume-chart.tsx
+
+**Checkpoint**: All four user stories are independently functional (quickstart.md Story 4)
+
+---
+
+## Phase 7: Polish & Cross-Cutting Concerns
+
+**Purpose**: Requirements that span multiple stories and aren't tied to one priority
+
+- [ ] T050 [P] Implement DELETE /auth/account (cascade delete across Postgres/MongoDB/Redis) in apps/api/src/auth/auth.controller.ts + apps/api/src/auth/auth.service.ts per FR-021 and data-model.md Account Deletion
+- [ ] T051 [P] Add class-validator/class-transformer request DTOs for all apps/api routes in apps/api/src/**/dto/*.dto.ts, enforced via the global ValidationPipe (T023)
+- [ ] T052 [P] Add structured request/error logging (Nest Logger + a global exception filter in apps/api; a plain structured logger in apps/worker)
+- [ ] T053 Security review pass: verify every apps/api route scopes reads/writes by authenticated user_id (FR-015/SC-005) and returns 404 (not 403) for other users' resources
+- [ ] T054 Run quickstart.md validation end-to-end, including the duplicate-delivery, user-isolation, and account-deletion checks
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: No dependencies — can start immediately
+- **Foundational (Phase 2)**: Depends on Setup completion — BLOCKS all user stories
+- **User Stories (Phase 3–6)**: All depend on Foundational phase completion
+  - US1 has no dependency on other stories
+  - US2 depends on US1's ingestion service (T029) being in place, but is otherwise independently testable once linked
+  - US3 depends on US1's ingestion service (T029) and parser handler (T031), extending both
+  - US4 depends on US1's parser publishing `workout.parsed` (T031)
+  - Recommended order given these dependencies: P1 → P2 → P3 → P4 (matches spec.md priority order)
+- **Polish (Phase 7)**: Depends on all four user stories being complete
+
+### Parallel Opportunities
+
+- All Setup tasks marked [P] (T003–T008, T010) can run in parallel after T001–T002
+- Foundational tasks marked [P] (T011, T012, T014–T016, T018, T019, T022, T024, T025) can run in parallel once their file-level prerequisites (T013, T017, T020, T021, T023) are in place
+- Within US1: T026, T027, T033, T034 are [P] (different concerns in the same file — coordinate route registration order, but logic is independent)
+- Within US2: T038, T040, T041 are [P]
+- Within US3: T046 is [P]
+- Within US4: T049 is [P]
+- Different user story phases (US1–US4) can be staffed in parallel by different developers once Phase 2 is complete, though US2–US4 each extend a file US1 created (see Dependencies above)
+
+---
+
+## Parallel Example: User Story 1
+
+```bash
+# Launch independent US1 route/model work together:
+Task: "Implement POST /auth/register in apps/api/src/auth/auth.controller.ts"
+Task: "Implement POST /auth/login in apps/api/src/auth/auth.controller.ts"
+Task: "Implement GET /workouts in apps/api/src/workouts/workouts.controller.ts"
+Task: "Implement GET /workouts/:id in apps/api/src/workouts/workouts.controller.ts"
+```
+
+---
+
+## Implementation Strategy
+
+### MVP First (User Story 1 Only)
+
+1. Complete Phase 1: Setup
+2. Complete Phase 2: Foundational (CRITICAL — blocks all stories)
+3. Complete Phase 3: User Story 1
+4. **STOP and VALIDATE**: run quickstart.md Story 1 independently
+5. Deploy/demo if ready — this alone is a usable text-logging product
+
+### Incremental Delivery
+
+1. Complete Setup + Foundational → Foundation ready
+2. Add User Story 1 → validate via quickstart.md → deploy/demo (MVP!)
+3. Add User Story 2 (Telegram) → validate → deploy/demo
+4. Add User Story 3 (photos) → validate → deploy/demo
+5. Add User Story 4 (dashboard chart) → validate → deploy/demo
+6. Phase 7 polish (account deletion, validation hardening, logging) can land alongside any of the above once its prerequisites exist
+
+---
+
+## Notes
+
+- [P] tasks = different files or independent concerns, no blocking dependency
+- [Story] label maps task to specific user story for traceability
+- No test-writing tasks were generated (not requested in spec.md); `quickstart.md` is the validation mechanism for each checkpoint
+- Commit after each task or logical group
+- Stop at any checkpoint to validate a story independently before moving on
