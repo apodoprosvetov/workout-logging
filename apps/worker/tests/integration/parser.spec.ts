@@ -25,7 +25,14 @@ import type { WorkerContext } from '../../src/index.js';
 import { registerParserConsumer } from '../../src/parser/handler.js';
 import { getDeathCount, handleParseFailure } from '../../src/parser/retry.js';
 
-describe('parser worker (integration, real Postgres + MongoDB + RabbitMQ + Claude)', () => {
+// Skipped without a real ANTHROPIC_API_KEY: this suite calls the actual
+// Claude/DeepSeek API, so it can't run in CI (spec 002's ci.yml deliberately
+// doesn't provision a real key — running paid, non-deterministic AI calls on
+// every push/PR isn't worth it). Still runs locally for anyone with a real
+// key in their .env.
+describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
+  'parser worker (integration, real Postgres + MongoDB + RabbitMQ + Claude)',
+  () => {
   let dataSource: DataSource;
   let mongoConnection: MongooseConnection;
   let amqpConnection: ChannelModel;
@@ -408,4 +415,5 @@ describe('parser worker (integration, real Postgres + MongoDB + RabbitMQ + Claud
       await channel.deleteQueue('test.scratch.retry-routing.5s').catch(() => undefined);
     }, 10000);
   });
-});
+  },
+);

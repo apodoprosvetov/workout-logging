@@ -43,7 +43,17 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
 
-    const exercise = await ds.getRepository(Exercise).findOneByOrFail({ slug: 'bench-press' });
+    // findOneByOrFail used to assume this row already existed — true only
+    // by accident in local dev (a prior real parser run had upserted it via
+    // matchAndUpsertExercise), never true on a fresh database (e.g. CI).
+    // Postgres `exercises` rows aren't seeded like Mongo's exercise_catalog
+    // (apps/api/src/db/seed-exercise-catalog.ts) — they're normally created
+    // lazily by the worker, so the test creates its own fixture instead of
+    // relying on incidental prior state.
+    const exerciseRepository = ds.getRepository(Exercise);
+    const exercise =
+      (await exerciseRepository.findOneBy({ slug: 'bench-press' })) ??
+      (await exerciseRepository.save(exerciseRepository.create({ slug: 'bench-press', name: 'Bench Press' })));
 
     const workout = await ds.getRepository(Workout).save(
       ds.getRepository(Workout).create({
