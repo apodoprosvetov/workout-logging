@@ -28,6 +28,13 @@ jobs:
       # relevant commits, not the whole repo history on every run.
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v3
+        env:
+          # As of a recent gitleaks-action update, scanning pull_request
+          # events requires this explicitly — it worked without it on a
+          # plain push (confirmed on main), then failed on the first real
+          # PR here. GITHUB_TOKEN is auto-provided by Actions, no secret to
+          # create.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   compose-step:
     runs-on: ubuntu-latest
