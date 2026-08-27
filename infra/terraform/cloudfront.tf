@@ -72,6 +72,7 @@ resource "aws_cloudfront_distribution" "web_distribution" {
       origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
+    
   }
 
   # Static export: GET/HEAD only, cached — this is the default (catch-all)
@@ -84,6 +85,11 @@ resource "aws_cloudfront_distribution" "web_distribution" {
     viewer_protocol_policy = "redirect-to-https"
 
     cache_policy_id = data.aws_cloudfront_cache_policy.caching_optimized.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.ext_rewrites.arn
+    }
   }
 
   # Cache disabled for API paths (research.md #4) — CloudFront forwards all
@@ -113,6 +119,13 @@ resource "aws_cloudfront_distribution" "web_distribution" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+}
+
+resource "aws_cloudfront_function" "ext_rewrites" {
+  name = "workout-logging-ext-rewrites"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code = file("${path.module}/cloudfront-ext-routes.js")
 }
 
 # The one public address for the whole app — apps/web and apps/api both live
