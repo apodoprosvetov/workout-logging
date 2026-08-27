@@ -41,9 +41,10 @@ run and its outcome; no additional tracking is introduced.
 Spec definition: the live target the application runs in (single
 production environment, per Assumptions).
 
-**Realized as**: one CloudFront distribution on one domain (research.md
-#3–4) fronting two origins provisioned by Terraform (research.md #5) —
-the S3 bucket (`apps/web`) and the single AWS EC2 instance (one Docker
+**Realized as**: one CloudFront distribution, reachable at its own free
+default `*.cloudfront.net` domain — no custom domain (research.md #3–4)
+— fronting two origins provisioned by Terraform (research.md #5) — the
+S3 bucket (`apps/web`) and the single AWS EC2 instance (one Docker
 Compose stack, one EBS volume, one Caddy reverse proxy) running
 `apps/api`/`apps/worker` plus the data stores.
 

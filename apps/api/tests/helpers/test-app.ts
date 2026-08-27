@@ -27,6 +27,7 @@ export async function createTestApp(imports: NonNullable<ModuleMetadata['imports
   }).compile();
 
   const app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+  app.setGlobalPrefix('api');
   await app.register(multipart, { attachFieldsToBody: 'keyValues' });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new AllExceptionsFilter());

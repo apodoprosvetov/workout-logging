@@ -15,13 +15,14 @@ build/
 # Testing
 coverage/
 
-# Terraform (specs/002-deployment-cicd) — state can contain sensitive values
+# Terraform (specs/002-deployment-cicd) — state can contain sensitive values.
+# .terraform.lock.hcl is NOT ignored — Terraform's own guidance is to commit
+# it, so `terraform init` pins the same provider version/hash everywhere.
 .terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
-.terraform.lock.hcl
 crash.log
 
 # Editor / OS

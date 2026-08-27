@@ -55,47 +55,56 @@ Each item below resolves one open technical question implied by spec.md
   model, but requires managing a private key as a GitHub secret and
   keeping port 22 open publicly.
 
-## 3. TLS: edge termination and the origin certificate
+## 3. TLS: no custom domain needed after all
 
-- **Decision**: Two TLS layers, not one. CloudFront terminates the
-  public-facing HTTPS connection using an AWS Certificate Manager (ACM)
-  certificate — note ACM certs used by CloudFront **must** be requested
-  in `us-east-1` regardless of where the rest of the infrastructure
-  lives, a real AWS quirk that needs a second, aliased Terraform AWS
-  provider. Between CloudFront and the EC2 origin, Caddy still
-  terminates TLS with its own certificate — CloudFront validates origin
-  certificates by default, so this still needs to be a real, trusted
-  cert, not self-signed. Caddy obtains it via Let's Encrypt's **DNS-01**
-  challenge against Route53 (not the default HTTP-01), because the
-  instance's security group (research.md #4) blocks inbound access from
-  everywhere except CloudFront's IP ranges — HTTP-01 would need port 80
-  reachable from Let's Encrypt's own validation servers, which this
-  lockdown specifically prevents. DNS-01 only needs Caddy to be able to
-  create a TXT record via the Route53 API (an IAM permission, not a
-  network path), so it works regardless.
-- **This also resolves spec.md's domain-name question**: a real DNS
-  domain (or subdomain) is required either way — this remains a
-  correction to the spec's original "no custom domain name is required"
-  Assumption (written before hosting mechanics were known). Recommend
-  Route53 as the DNS host specifically, since it's what makes the DNS-01
-  flow above straightforward via Terraform/IAM rather than a manual step
-  at an external registrar.
-- **Rationale**: Keeping origin traffic encrypted (not just
-  edge-to-browser) is standard defense-in-depth and is what CloudFront
-  expects by default for a custom origin. DNS-01 is the only renewal
-  method compatible with an instance that's otherwise fully locked down
-  from the public internet.
-- **Alternatives considered**: HTTP-01 with a temporarily-opened port 80
-  during renewal windows — adds a recurring window of public exposure
-  purely to satisfy a certificate renewal, worse than DNS-01 in every
-  way once DNS-01 is available; CloudFront configured to skip origin
-  certificate validation — not a clean, supported pattern for custom
-  origins, avoided.
+- **Decision**: No custom domain, no ACM certificate, no Route53. Every
+  CloudFront distribution gets a free `*.cloudfront.net` subdomain
+  automatically, served over HTTPS with CloudFront's own AWS-managed
+  default certificate — a real, trusted, CA-issued cert, satisfying
+  FR-005/SC-006 with zero additional setup. Between CloudFront and the
+  EC2 origin, the connection is plain HTTP (CloudFront's "HTTP Only"
+  origin protocol policy), not HTTPS — safe here specifically because
+  the security group (research.md #4) already restricts that origin to
+  CloudFront's IP ranges only, so there's no public-internet leg to
+  protect with origin-side TLS. Caddy's job shrinks to being a local
+  reverse proxy / load balancer across `apps/api`'s replicas
+  (research.md #7) — no certificate, no Let's Encrypt, no DNS-01, no
+  Route53 IAM permissions.
+- **This corrects an earlier over-correction**: research.md previously
+  concluded a real domain was required (reasoning: ACM certs need a
+  custom domain, and CloudFront validates origin certs so Caddy would
+  need one too, which — given the CloudFront-only security group —
+  meant DNS-01 via Route53). That whole chain assumed a *custom* domain
+  and origin-side HTTPS were both necessary; neither actually is.
+  spec.md's original Assumption ("no custom domain name is required")
+  was right all along — the correction earlier in this document was
+  itself mistaken and is now reverted.
+- **Rationale**: Fewer moving parts (no ACM, no Route53, no DNS-01
+  challenge flow, no `us-east-1` provider alias) for a personal-scale
+  project where a `*.cloudfront.net` URL is a perfectly acceptable
+  public address. Telegram's Bot API webhook requirement is just "valid
+  HTTPS on a standard port with a trusted cert" — a `.cloudfront.net`
+  URL satisfies that with no restriction on which domain it is.
+- **Upgrade path, not a redesign**: adding a custom domain later is
+  purely additive — register/point a domain, request an ACM cert (in
+  `us-east-1`) for it, add it as a CloudFront Alternate Domain Name.
+  Nothing built now needs to change to support that later.
+- **Alternatives considered**: The original custom-domain design
+  (Caddy + Let's Encrypt DNS-01 + Route53 + ACM) — works, but is
+  meaningfully more infrastructure (a DNS host, a certificate lifecycle,
+  broader IAM permissions for Caddy) for a benefit (a memorable URL,
+  durability across a distribution recreation) that doesn't offset the
+  added complexity at this project's current scale; keeping the
+  CloudFront↔EC2 origin connection as HTTPS anyway "for defense in
+  depth" — rejected as the one piece of this that would still need a
+  cert without a domain to name it, and the security-group lockdown
+  already removes the threat it would defend against.
 
-## 4. Unified CloudFront: one domain, two origins, no CORS
+## 4. Unified CloudFront: one distribution, two origins, no CORS
 
 - **Decision**: A single CloudFront distribution in front of both
-  origins on one domain — path-based cache behaviors route `/` (and
+  origins, reachable at its one default `*.cloudfront.net` domain
+  (research.md #3) — path-based cache behaviors route `/` (and
   other static asset paths) to the S3 bucket (research.md #1), and API
   paths (`/auth/*`, `/workouts/*`, `/telegram/*`, etc.) to the EC2/Caddy
   origin, with caching disabled for those paths (dynamic, per-user
@@ -114,22 +123,22 @@ Each item below resolves one open technical question implied by spec.md
   the first place. Locking the EC2 security group to CloudFront-only is
   a meaningful security improvement over exposing the instance directly,
   at no extra cost.
-- **Alternatives considered**: Two separate domains/subdomains (e.g.
-  `app.example.com` for web, `api.example.com` for the EC2 origin) —
-  simpler CloudFront configuration (single-origin distributions instead
-  of path-based routing), but keeps CORS as a permanent production
-  requirement and leaves the EC2 instance's public HTTPS endpoint
-  directly internet-facing rather than CloudFront-only.
+- **Alternatives considered**: Two separate CloudFront distributions
+  (one per origin, e.g. reached at two different `.cloudfront.net`
+  domains) — simpler CloudFront configuration (single-origin
+  distributions instead of path-based routing), but keeps CORS as a
+  permanent production requirement and leaves the EC2 instance's public
+  HTTPS endpoint directly internet-facing rather than CloudFront-only.
 
 ## 5. Infrastructure as code
 
 - **Decision**: Terraform, covering the EC2 instance, its security
   group (CloudFront-IP-only, research.md #4), the EBS data volume, an
-  IAM role (SSM deploy + ECR pulls + Route53 DNS-01 records), the ECR
-  repositories (api, worker only — research.md #1), the S3 bucket +
-  CloudFront distribution + ACM certificate (`us-east-1` provider alias)
-  + Route53 records, the SNS topic + email subscription, the CloudWatch
-  Synthetics canary + alarm, and the AWS Backup plan.
+  IAM role (SSM deploy + ECR pulls), the ECR repositories (api, worker
+  only — research.md #1), the S3 bucket + CloudFront distribution
+  (research.md #3–4 — no ACM certificate, no Route53, no custom domain),
+  the SNS topic + email subscription, the CloudWatch Synthetics canary +
+  alarm, and the AWS Backup plan.
 - **Rationale**: FR-001 already requires the *application* source under
   version control; the same reasoning applies to the infrastructure that
   runs it — reproducible from a clean AWS account, self-documenting,

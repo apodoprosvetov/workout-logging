@@ -21,7 +21,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
   async function registerAndGetToken(label: string): Promise<{ email: string; accessToken: string }> {
     const email = emails.next(label);
-    const res = await request(httpServer(app)).post('/auth/register').send({ email, password });
+    const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     return { email, accessToken: (res.body as { access_token: string }).access_token };
   }
 
@@ -75,7 +75,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
     const start = Date.now();
     const res = await request(httpServer(app))
-      .post('/workouts')
+      .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
       .field('text', 'bench press 80kg x8')
       .field('performed_at', new Date().toISOString());
@@ -90,7 +90,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
   it('really did write to Postgres, MongoDB, and publish to workout.parse.q', async () => {
     const { accessToken } = await registerAndGetToken('sideeffects');
     const res = await request(httpServer(app))
-      .post('/workouts')
+      .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
       .field('text', 'squat 100kg x5');
 
@@ -110,7 +110,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
   });
 
   it('returns 401 without an Authorization header', async () => {
-    const res = await request(httpServer(app)).post('/workouts').field('text', 'bench press');
+    const res = await request(httpServer(app)).post('/api/workouts').field('text', 'bench press');
 
     expect(res.status).toBe(401);
   });
@@ -118,7 +118,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
   it('accepts multiple images under the same "images" field (research.md #11), stores each in GridFS, and records has_image', async () => {
     const { accessToken } = await registerAndGetToken('multiimage');
     const res = await request(httpServer(app))
-      .post('/workouts')
+      .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
       .attach('images', Buffer.from('fake-image-bytes-1'), 'page1.jpg')
       .attach('images', Buffer.from('fake-image-bytes-2'), 'page2.jpg')
@@ -149,7 +149,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
   it('rejects more than 10 images (MAX_WORKOUT_IMAGES cap, research.md #11)', async () => {
     const { accessToken } = await registerAndGetToken('toomanyimages');
-    let req = request(httpServer(app)).post('/workouts').set('authorization', `Bearer ${accessToken}`);
+    let req = request(httpServer(app)).post('/api/workouts').set('authorization', `Bearer ${accessToken}`);
     for (let i = 0; i < 11; i++) {
       req = req.attach('images', Buffer.from(`fake-image-bytes-${i}`), `page${i}.jpg`);
     }
@@ -162,7 +162,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     const { accessToken } = await registerAndGetToken('empty');
 
     const res = await request(httpServer(app))
-      .post('/workouts')
+      .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
       .field('performed_at', new Date().toISOString());
 
@@ -173,7 +173,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     const { accessToken } = await registerAndGetToken('badtime');
 
     const res = await request(httpServer(app))
-      .post('/workouts')
+      .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
       .field('text', 'deadlift 120kg x3')
       .field('performed_at', 'not-a-date');
@@ -189,7 +189,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
       // Sequential on purpose: the sliding-window limiter counts requests within
       // the window regardless of concurrency, and sequential keeps this deterministic.
       const res = await request(httpServer(app))
-        .post('/workouts')
+        .post('/api/workouts')
         .set('authorization', `Bearer ${accessToken}`)
         .field('text', `rep ${i}`);
       responses.push(res.status);

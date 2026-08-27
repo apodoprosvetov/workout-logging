@@ -1,0 +1,65 @@
+# FR-002/FR-003: every push/PR runs spec 001's Vitest/Supertest suites
+# against real Postgres/MongoDB/Redis/RabbitMQ (not mocked, matching
+# apps/api/tests/helpers/test-app.ts's own testing philosophy) and fails
+# the run — and therefore blocks merge, once branch protection requires
+# this check — on any test failure.
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+   
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # FR-008: scans this push/PR's new commits for secrets (API keys,
+      # passwords, etc.) and fails the run if it finds any — continuous
+      # enforcement going forward, not a one-off. gitleaks-action v2+ uses
+      # the Action context/GitHub API to scope the scan to just the
+      # relevant commits, not the whole repo history on every run.
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v3
+
+  compose-step:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # NestJS's ConfigModule (apps/api/src/app.module.ts, and the contract-
+      # test harness) reads a literal .env file from disk — it doesn't exist
+      # on a fresh checkout (.env is gitignored, only .env.example is
+      # tracked). .env.example's values are already the docker-compose.yml
+      # defaults, so this is a straight copy, no substitution needed.
+      - name: Prepare env file
+        run: cp .env.example .env
+
+      # --wait blocks until every service's healthcheck (already defined in
+      # docker-compose.yml) reports healthy, or fails the step if one never
+      # does — without it, `up -d` returns as soon as containers start, and
+      # the test step could hit Postgres/Mongo before they're accepting
+      # connections yet.
+      - name: Start containers
+        run: |
+          docker compose up -d --wait
+          docker compose ps
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: 'package.json'
+
+      - name: Test application
+        run: |
+          npm ci
+          npm run test --workspaces

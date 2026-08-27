@@ -10,11 +10,12 @@ Proves each user story end-to-end against the real pipeline/infrastructure
   `deploy.yml` in place.
 - `infra/terraform/` applied at least once (EC2 instance with a
   CloudFront-only security group, EBS volume, ECR repositories, S3
-  bucket, CloudFront distribution + ACM cert, Route53 records, SNS
-  topic + confirmed email subscription, CloudWatch Synthetics canary +
-  alarm, AWS Backup plan all provisioned).
-- A domain name's DNS pointed at the CloudFront distribution
-  (research.md #3–4), not directly at the EC2 instance.
+  bucket, CloudFront distribution — reachable at its own default
+  `*.cloudfront.net` domain, no ACM/Route53/custom domain needed
+  (research.md #3–4) — SNS topic + confirmed email subscription,
+  CloudWatch Synthetics canary + alarm, AWS Backup plan all provisioned).
+- Note the distribution's default domain (`terraform output`, or the
+  CloudFront console) — used below as `<cloudfront-domain>`.
 - Application runtime secrets present in AWS Systems Manager Parameter
   Store (research.md #10).
 - GitHub Actions has the AWS role/OIDC credentials needed for ECR push,
@@ -42,8 +43,8 @@ nothing attempts to deploy. Revert the breaking change, push again —
 ```
 
 **Expected**: `deploy.yml` runs automatically — no manual deploy step.
-Within 15 minutes (SC-002), `curl -I https://<your-domain>/` (served via
-CloudFront from S3) and `curl -I https://<your-domain>/auth/register`
+Within 15 minutes (SC-002), `curl -I https://<cloudfront-domain>/` (served via
+CloudFront from S3) and `curl -I https://<cloudfront-domain>/auth/register`
 (routed via CloudFront to the EC2 origin) both return a successful
 response over a trusted HTTPS connection (no `-k`/insecure flag needed).
 While the API deploy is in progress, repeatedly curl an API path from
@@ -60,7 +61,7 @@ deploy completes.
 ## Story 3 — Public endpoint reachable by an external service (P3)
 
 ```bash
-curl -sX POST https://<your-domain>/auth/register \
+curl -sX POST https://<cloudfront-domain>/auth/register \
   -H 'content-type: application/json' \
   -d '{"email":"quickstart@example.com","password":"correct horse battery staple"}'
 ```
@@ -68,11 +69,11 @@ curl -sX POST https://<your-domain>/auth/register \
 **Expected**: a direct HTTPS POST (not a browser) succeeds — proves the
 endpoint accepts real inbound requests the same way Telegram's webhook
 calls would, once `POST /telegram/webhook` exists (spec 001, T038–T041).
-`curl -v` the same URL and confirm the certificate presented is the ACM
-certificate CloudFront terminates with (a trusted CA, not self-signed —
-SC-006); the origin-side Caddy/Let's Encrypt certificate (research.md
-#3) is internal to the CloudFront→EC2 hop and never seen by an external
-client directly.
+`curl -v` the same URL and confirm the certificate presented is
+CloudFront's own default certificate for its `*.cloudfront.net` domain
+(a trusted CA, not self-signed — SC-006, research.md #3); the
+CloudFront→EC2 hop behind it is plain HTTP, invisible to an external
+client either way.
 
 ## Story 4 — Recovering from a bad deploy (P4)
 
@@ -118,7 +119,7 @@ the same channel.
   security group has no rule allowing the public internet directly —
   only CloudFront's published IP ranges.
 - **Static export routing** (research.md #1): visit
-  `https://<your-domain>/workouts?id=<a real workout id>` in a browser
+  `https://<cloudfront-domain>/workouts?id=<a real workout id>` in a browser
   and confirm it renders that workout's detail view — proves the
   query-param routing works under static export without any CloudFront
   fallback-routing tricks.

@@ -17,6 +17,9 @@ async function bootstrap(): Promise<void> {
   const webOrigin = app.get(ConfigService).get<string>('WEB_ORIGIN') ?? 'http://localhost:3001';
   app.enableCors({ origin: webOrigin });
 
+  // Adds prefix to all controllers
+  app.setGlobalPrefix('api'); 
+
   // keyValues: text fields become plain values, files become Buffers, directly
   // on request.body — lets POST /workouts use a normal class-validator DTO.
   await app.register(multipart, { attachFieldsToBody: 'keyValues' });

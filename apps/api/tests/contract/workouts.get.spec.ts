@@ -28,7 +28,7 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
 
   async function registerAndGetToken(label: string): Promise<{ userId: string; accessToken: string }> {
     const email = emails.next(label);
-    const res = await request(httpServer(app)).post('/auth/register').send({ email, password });
+    const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     const body = res.body as { access_token: string; user: { id: string } };
     return { userId: body.user.id, accessToken: body.access_token };
   }
@@ -122,12 +122,12 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
   });
 
   it('returns 401 without an Authorization header', async () => {
-    const res = await request(httpServer(app)).get(`/workouts/${workoutId}`);
+    const res = await request(httpServer(app)).get(`/api/workouts/${workoutId}`);
     expect(res.status).toBe(401);
   });
 
   it('returns the full workout with ordered exercises/sets for its owner', async () => {
-    const res = await request(httpServer(app)).get(`/workouts/${workoutId}`).set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app)).get(`/api/workouts/${workoutId}`).set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -147,18 +147,18 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
 
   it("returns 404, not 403, for another user's workout (never confirm existence)", async () => {
     const res = await request(httpServer(app))
-      .get(`/workouts/${otherUsersWorkoutId}`)
+      .get(`/api/workouts/${otherUsersWorkoutId}`)
       .set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(404);
   });
 
   it('returns 404 for a nonexistent (but validly formatted) id', async () => {
-    const res = await request(httpServer(app)).get(`/workouts/${randomUUID()}`).set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app)).get(`/api/workouts/${randomUUID()}`).set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(404);
   });
 
   it('returns 400 for a malformed id', async () => {
-    const res = await request(httpServer(app)).get('/workouts/not-a-uuid').set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app)).get('/api/workouts/not-a-uuid').set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(400);
   });
 });

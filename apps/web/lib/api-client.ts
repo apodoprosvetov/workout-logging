@@ -3,7 +3,7 @@
 // the request once. apps/web never talks to Postgres/Mongo/Redis/RabbitMQ
 // directly — this is the one place all of that traffic funnels through.
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000/api';
 const TOKEN_STORAGE_KEY = 'workout-logging.tokens';
 
 export interface StoredTokens {

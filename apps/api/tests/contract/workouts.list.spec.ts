@@ -16,7 +16,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
 
   async function registerAndGetToken(label: string): Promise<{ userId: string; accessToken: string }> {
     const email = emails.next(label);
-    const res = await request(httpServer(app)).post('/auth/register').send({ email, password });
+    const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     const body = res.body as { access_token: string; user: { id: string } };
     return { userId: body.user.id, accessToken: body.access_token };
   }
@@ -67,7 +67,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
   });
 
   it('returns 401 without an Authorization header', async () => {
-    const res = await request(httpServer(app)).get('/workouts');
+    const res = await request(httpServer(app)).get('/api/workouts');
     expect(res.status).toBe(401);
   });
 
@@ -80,7 +80,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     const otherUsersWorkout = await seedWorkout(ds, otherUserId);
     await ds.destroy();
 
-    const res = await request(httpServer(app)).get('/workouts').set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     const ids = (res.body.workouts as Array<{ id: string }>).map((w) => w.id);
@@ -95,7 +95,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     await ds.destroy();
 
     const res = await request(httpServer(app))
-      .get('/workouts?status=needs_review')
+      .get('/api/workouts?status=needs_review')
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
@@ -106,7 +106,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
 
   it('respects limit', async () => {
     const res = await request(httpServer(app))
-      .get('/workouts?limit=1')
+      .get('/api/workouts?limit=1')
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
@@ -126,7 +126,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     await ds.destroy();
 
     const res = await request(httpServer(app))
-      .get(`/workouts?before=${beforeCursor.toISOString()}`)
+      .get(`/api/workouts?before=${beforeCursor.toISOString()}`)
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
@@ -138,13 +138,13 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
 
   it('returns 400 for an invalid status value', async () => {
     const res = await request(httpServer(app))
-      .get('/workouts?status=not-a-real-status')
+      .get('/api/workouts?status=not-a-real-status')
       .set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(400);
   });
 
   it('returns 400 for a limit over the max', async () => {
-    const res = await request(httpServer(app)).get('/workouts?limit=101').set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app)).get('/api/workouts?limit=101').set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(400);
   });
 });

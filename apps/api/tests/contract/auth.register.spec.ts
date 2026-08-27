@@ -21,7 +21,7 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
   it('returns 201 with access_token, refresh_token, and user on success', async () => {
     const email = emails.next('ok');
     const res = await request(httpServer(app))
-      .post('/auth/register')
+      .post('/api/auth/register')
       .send({ email, password: 'correct horse battery staple' });
 
     expect(res.status).toBe(201);
@@ -33,10 +33,10 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
 
   it('returns 409 for an already-registered email', async () => {
     const email = emails.next('dup');
-    await request(httpServer(app)).post('/auth/register').send({ email, password: 'correct horse battery staple' });
+    await request(httpServer(app)).post('/api/auth/register').send({ email, password: 'correct horse battery staple' });
 
     const res = await request(httpServer(app))
-      .post('/auth/register')
+      .post('/api/auth/register')
       .send({ email, password: 'a different password entirely' });
 
     expect(res.status).toBe(409);
@@ -44,7 +44,7 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
 
   it('returns 400 for an invalid email', async () => {
     const res = await request(httpServer(app))
-      .post('/auth/register')
+      .post('/api/auth/register')
       .send({ email: 'not-an-email', password: 'correct horse battery staple' });
 
     expect(res.status).toBe(400);
@@ -52,7 +52,7 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
 
   it('returns 400 for a password shorter than 8 characters', async () => {
     const res = await request(httpServer(app))
-      .post('/auth/register')
+      .post('/api/auth/register')
       .send({ email: emails.next('shortpw'), password: 'abc' });
 
     expect(res.status).toBe(400);
@@ -60,7 +60,7 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
 
   it('returns 400 for an unexpected extra field (forbidNonWhitelisted)', async () => {
     const res = await request(httpServer(app))
-      .post('/auth/register')
+      .post('/api/auth/register')
       .send({ email: emails.next('extra'), password: 'correct horse battery staple', isAdmin: true });
 
     expect(res.status).toBe(400);
@@ -69,7 +69,7 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
   it('stores the password as an argon2 hash, never plaintext', async () => {
     const email = emails.next('hash');
     const password = 'correct horse battery staple';
-    await request(httpServer(app)).post('/auth/register').send({ email, password });
+    await request(httpServer(app)).post('/api/auth/register').send({ email, password });
 
     const ds = createTypeOrmDataSource();
     await ds.initialize();

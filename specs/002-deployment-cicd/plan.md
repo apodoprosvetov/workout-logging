@@ -15,10 +15,12 @@ server-rendering/API-routes/server-actions, so it doesn't need to run as a
 container at all. A single CloudFront distribution fronts both: `/` routes
 to S3, API paths route to a single AWS EC2 instance running
 `apps/api`/`apps/worker` plus Postgres/MongoDB/Redis/RabbitMQ via Docker
-Compose behind Caddy (FR-004/005/006/011). Because web and api share one
-CloudFront domain, they're same-origin in production — no CORS needed —
-and the EC2 instance's security group only accepts traffic from CloudFront,
-never the public internet directly. Rollback is redeploying the previous
+Compose behind Caddy (FR-004/005/006/011) — all reachable at CloudFront's
+own free default domain, no custom domain or certificate needed. Because
+web and api share that one CloudFront domain, they're same-origin in
+production — no CORS needed — and the EC2 instance's security group only
+accepts traffic from CloudFront, never the public internet directly.
+Rollback is redeploying the previous
 build (image tag or S3 build prefix) through the same pipeline (FR-007). A
 CloudWatch Synthetics canary plus SNS email covers deploy-failure and
 post-deploy health alerting (FR-010/012/013/014); AWS Backup takes weekly
@@ -38,12 +40,14 @@ routing change noted below.
 infrastructure as code, research.md #5); Amazon ECR for `apps/api`/
 `apps/worker` images only (research.md #1); an S3 bucket for `apps/web`'s
 static export (research.md #1); a single CloudFront distribution fronting
-both, with an ACM certificate (research.md #3–4); AWS Systems Manager
+both, reachable at its own default `*.cloudfront.net` domain — no ACM
+certificate, no custom domain (research.md #3–4); AWS Systems Manager
 (SSM) Run Command to trigger the EC2 rollout without an open SSH port
-(research.md #2); Caddy (origin-side reverse proxy + TLS, DNS-01 via
-Route53, research.md #3) in front of the Docker Compose stack; Amazon
-CloudWatch Synthetics (canary) + Amazon SNS (email) for alerting
-(research.md #8); AWS Backup (scheduled EBS snapshots, research.md #9).
+(research.md #2); Caddy (plain-HTTP origin-side reverse proxy / load
+balancer across `apps/api`'s replicas — no TLS, research.md #3) in front
+of the Docker Compose stack; Amazon CloudWatch Synthetics (canary) +
+Amazon SNS (email) for alerting (research.md #8); AWS Backup (scheduled
+EBS snapshots, research.md #9).
 
 **Storage**: Same Postgres/MongoDB/Redis/RabbitMQ as spec 001, unchanged
 schema/data model — this feature only changes *where* they run: as Docker
@@ -57,11 +61,11 @@ backup needed — research.md #9).
 types. New: a post-deploy HTTP smoke test against the live CloudFront URL,
 gating FR-011's "confirm healthy before switching."
 
-**Target Platform**: AWS — CloudFront (global edge) in front of an S3
-bucket (`apps/web`) and a single EC2 Linux instance running Docker Compose
-(`apps/api`/`apps/worker` + data stores), region `eu-central-1` as a
-reasonable default (CloudFront/ACM's `us-east-1` requirement is a fixed
-AWS constraint, not a choice — research.md #3).
+**Target Platform**: AWS — CloudFront (global edge, its own default
+domain) in front of an S3 bucket (`apps/web`) and a single EC2 Linux
+instance running Docker Compose (`apps/api`/`apps/worker` + data stores),
+region `eu-central-1` as a reasonable default for the EC2/EBS/ECR
+resources (CloudFront itself is a global service, not region-pinned).
 
 **Project Type**: Infrastructure / deployment automation for the existing
 spec-001 application. One code change to existing application source:
@@ -74,18 +78,18 @@ static export (research.md #1) — otherwise no new application-layer code.
 unrecoverable in a total-loss scenario).
 
 **Constraints**: Cost-conscious — a single small EC2 instance, no
-ALB/NAT Gateway/managed-DB services (spec Clarifications: EC2 over
-ECS/Fargate); secrets only via GitHub Actions encrypted secrets + AWS
-Systems Manager Parameter Store, never in git (FR-008); zero-downtime
-deploys for `apps/api` (FR-011, research.md #7); weekly backups
-(FR-015). **A real domain name is required** for trusted TLS — this
-corrects spec.md's "no custom domain name is required" assumption,
-written before the concrete hosting mechanics were known (research.md
-#3). The EC2 security group accepts inbound traffic only from
-CloudFront's IP ranges (research.md #4) — this also means CORS is not
-needed in production (same-origin via one CloudFront domain), though the
-existing local-dev CORS config (`apps/api`'s `enableCors`) stays
-unchanged since local dev still runs web/api on different ports.
+ALB/NAT Gateway/managed-DB/ACM/Route53 services (spec Clarifications: EC2
+over ECS/Fargate; research.md #3: no custom domain needed either);
+secrets only via GitHub Actions encrypted secrets + AWS Systems Manager
+Parameter Store, never in git (FR-008); zero-downtime deploys for
+`apps/api` (FR-011, research.md #7); weekly backups (FR-015). No custom
+domain is required — spec.md's original "no custom domain name is
+required" Assumption holds; CloudFront's own default domain satisfies
+FR-005/SC-006 (research.md #3). The EC2 security group accepts inbound
+traffic only from CloudFront's IP ranges (research.md #4) — this also
+means CORS is not needed in production (same-origin via CloudFront),
+though the existing local-dev CORS config (`apps/api`'s `enableCors`)
+stays unchanged since local dev still runs web/api on different ports.
 
 **Scale/Scope**: Single EC2 instance, single production environment,
 single maintainer — matches spec 001's own personal/low-concurrency
@@ -139,15 +143,16 @@ infra/
 ├── terraform/                 # AWS resources as code (research.md #5)
 │   ├── main.tf                  # EC2 instance, CloudFront-only security group, EBS volume,
 │   │                             # IAM role, ECR repos (api/worker), S3 bucket, CloudFront
-│   │                             # distribution (2 origins/path-based behaviors), ACM cert
-│   │                             # (us-east-1 provider alias), Route53 records, SNS topic +
+│   │                             # distribution (2 origins/path-based behaviors, default
+│   │                             # *.cloudfront.net domain — no ACM, no Route53), SNS topic +
 │   │                             # email subscription, CloudWatch Synthetics canary + alarm,
 │   │                             # AWS Backup plan
 │   ├── variables.tf
 │   └── outputs.tf
 ├── docker-compose.prod.yml    # Production overlay: pre-built ECR images (no `build:`),
 │                               # Caddy service, 2 replicas for apps/api only (research.md #7)
-└── Caddyfile                  # Origin-side reverse proxy + TLS via DNS-01 (research.md #3)
+└── Caddyfile                  # Origin-side reverse proxy / load balancer, plain HTTP,
+                                # no TLS (research.md #3)
 
 docker-compose.yml              # Existing local-dev compose (spec 001) — unchanged
 apps/, packages/                # Existing application code (spec 001) — unchanged except
