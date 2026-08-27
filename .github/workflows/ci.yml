@@ -62,4 +62,17 @@ jobs:
       - name: Test application
         run: |
           npm ci
-          npm run test --workspaces
+          # apps/api and apps/worker import @workout-logging/shared as a
+          # package (via its package.json "main": "dist/index.js"), not as
+          # raw TS source — its compiled dist/ is gitignored (developer
+          # machines already have it from a prior local build), so a fresh
+          # CI checkout has to build it before anything can resolve the
+          # import. Building it alone (not `--workspaces`) sidesteps plain
+          # npm workspaces having no dependency-aware build ordering — a
+          # blanket `build --workspaces` here failed apps/worker's build
+          # because it ran before shared's.
+          npm run build --workspace=@workout-logging/shared
+          # --if-present: apps/web has no "test" script yet — without this
+          # flag, npm workspaces treats that as a hard failure for the
+          # whole command instead of just skipping it.
+          npm run test --workspaces --if-present
