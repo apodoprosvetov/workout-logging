@@ -15,6 +15,9 @@ resource "aws_instance" "web_server" {
   vpc_security_group_ids = [aws_security_group.app.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_instance_profile.name
 
+  user_data                   = file("${path.module}/mount-data-volume.sh")
+  user_data_replace_on_change = true
+
   tags = {
     Name = "AL2023-From-SSM"
   }

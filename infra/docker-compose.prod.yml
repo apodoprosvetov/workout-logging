@@ -1,0 +1,138 @@
+# T022: production stack for the EC2 instance (research.md #7). Runs via
+# SSM Run Command (T025's deploy.yml), not `docker compose up` typed by
+# hand — env vars below (${...}) come from the shell environment the
+# deploy script builds by resolving AWS Systems Manager Parameter Store
+# SecureString values (research.md #10, T014) just before this runs; none
+# of them are written to a file on disk.
+#
+# Named volumes are NOT used here on purpose — they'd default to living
+# under Docker's data-root on the instance's root EBS volume, not the
+# dedicated data volume from T006 (research.md #9, the one AWS Backup
+# snapshots). Bind-mounted to /mnt/data/* instead, which needs that volume
+# formatted and mounted there first — not yet done (see tasks.md's note on
+# this file).
+#
+# apps/web has no service here at all — it's an S3/CloudFront static
+# export (research.md #1), not a container.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: workout_logging
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: workout_logging
+    volumes:
+      - /mnt/data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U workout_logging']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: workout_logging
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - /mnt/data/mongo:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', 'db.adminCommand("ping")']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: workout_logging
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - /mnt/data/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # No `build:` — pre-built images only, pushed to ECR by ci.yml/deploy.yml
+  # (T023-T025), tagged by commit SHA (research.md #6, rollback = redeploy
+  # a previous tag). ${IMAGE_TAG} is set by the deploy script.
+  api-1: &api
+    image: ${ECR_API_REPOSITORY_URI}:${IMAGE_TAG}
+    restart: unless-stopped
+    environment: &api-environment
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL}
+      MONGO_URL: ${MONGO_URL}
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Same image/env as api-1 — two replicas so Caddy (T021) can roll one at
+  # a time without a downtime window (research.md #7, FR-011).
+  api-2:
+    <<: *api
+
+  worker:
+    image: ${ECR_WORKER_REPOSITORY_URI}:${IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MONGO_URL: ${MONGO_URL}
+      # Required even though apps/worker never calls Redis directly:
+      # @workout-logging/shared's barrel export throws at import time if
+      # REDIS_URL is unset (packages/shared/src/db/redis.ts), and
+      # apps/worker imports from that same barrel.
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # No JWT_SECRET/PORT/TELEGRAM_BOT_TOKEN — worker has no HTTP surface
+    # and never issues/verifies tokens (only apps/api does).
+    # Single replica: no HTTP surface to load-balance, and spec 001's
+    # existing consumer idempotency/retry design already tolerates a brief
+    # restart without losing or double-processing a message.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - '80:80'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - api-1
+      - api-2
