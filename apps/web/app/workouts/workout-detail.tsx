@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, apiJson } from '../../../lib/api-client';
-import { useRequireAuth } from '../../../lib/use-require-auth';
-import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutDetail as WorkoutDetailData } from '../../../lib/workouts';
+import { ApiError, apiJson } from '../../lib/api-client';
+import { useRequireAuth } from '../../lib/use-require-auth';
+import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutDetail as WorkoutDetailData } from '../../lib/workouts';
 
 export function WorkoutDetail({ id }: { id: string }) {
   const ready = useRequireAuth();

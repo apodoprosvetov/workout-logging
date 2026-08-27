@@ -86,7 +86,7 @@ export default function DashboardPage() {
           {workouts.map((workout) => (
             <li key={workout.id}>
               <Link
-                href={`/workouts/${workout.id}`}
+                href={`/workouts?id=${workout.id}`}
                 className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900"
               >
                 <div className="flex flex-col">
