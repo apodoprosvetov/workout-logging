@@ -5,6 +5,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { mongoUri, typeOrmDataSourceOptions } from '@workout-logging/shared';
 import { AuthModule } from './auth/auth.module';
+import { HealthModule } from './health/health.module';
 import { WorkoutsModule } from './workouts/workouts.module';
 
 @Module({
@@ -17,6 +18,7 @@ import { WorkoutsModule } from './workouts/workouts.module';
     MongooseModule.forRoot(mongoUri),
     AuthModule,
     WorkoutsModule,
+    HealthModule,
   ],
 })
 export class AppModule {}
