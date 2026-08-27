@@ -25,7 +25,7 @@ describe('POST /auth/login (contract, per contracts/api.md)', () => {
   it('returns 200 with access_token and refresh_token for correct credentials', async () => {
     const res = await request(httpServer(app)).post('/api/auth/login').send({ email: registeredEmail, password });
 
-    expect(res.status).toBe(999); // T018: deliberately wrong, to prove ci.yml fails on a real test failure
+    expect(res.status).toBe(200);
     expect(typeof res.body.access_token).toBe('string');
     expect(res.body.refresh_token.split('.')).toHaveLength(2);
     // Login response has no `user` field (that's register-only, per contracts/api.md).
