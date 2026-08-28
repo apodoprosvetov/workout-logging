@@ -29,10 +29,19 @@ data "aws_iam_policy_document" "github_assume_role" {
     }
 
     # CRITICAL SECURITY: Restrict execution to your GitHub organization and repo
+    #
+    # Real failure found running deploy.yml for the first time: repos
+    # created after 2026-07-15 get GitHub's newer "immutable subject
+    # claims" by default — sub is
+    # "repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/main" (confirmed by
+    # decoding the actual OIDC token in a live run), not the classic
+    # "repo:OWNER/REPO:ref:..." this was originally written for. The `@*`
+    # wildcards match any owner/repo ID while still requiring the literal
+    # names to match exactly.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:apodoprosvetov/workout-logging:ref:refs/heads/main"]
+      values   = ["repo:apodoprosvetov@*/workout-logging@*:ref:refs/heads/main"]
     }
   }
 }
