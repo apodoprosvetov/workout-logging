@@ -151,9 +151,17 @@ data "aws_iam_policy_document" "github_actions_s3_ecr_permissions" {
   # cloudfront:CreateInvalidation permission at all, so the post-S3-sync
   # cache invalidation step failed with AccessDenied. Scoped to this one
   # distribution, not "*".
+  #
+  # cloudfront:GetDistribution added later (T026) — the smoke-test step
+  # looks up the live domain dynamically via GetDistribution rather than
+  # hardcoding/duplicating it as another secret, and hit the same
+  # AccessDenied pattern on its first real run.
   statement {
-    effect    = "Allow"
-    actions   = ["cloudfront:CreateInvalidation"]
+    effect = "Allow"
+    actions = [
+      "cloudfront:CreateInvalidation",
+      "cloudfront:GetDistribution"
+    ]
     resources = [aws_cloudfront_distribution.web_distribution.arn]
   }
 }
