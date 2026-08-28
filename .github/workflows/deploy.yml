@@ -1,0 +1,124 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  id-token: write # needs to be able to request an OIDC token from GitHub for AWS STS
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-central-1
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push apps/api
+        run: |
+          docker build --platform linux/amd64 -f apps/api/Dockerfile \
+            -t ${{ secrets.ECR_API_REPOSITORY_URI }}:${{ github.sha }} .
+          docker push ${{ secrets.ECR_API_REPOSITORY_URI }}:${{ github.sha }}
+
+      - name: Build and push apps/worker
+        run: |
+          docker build --platform linux/amd64 -f apps/worker/Dockerfile \
+            -t ${{ secrets.ECR_WORKER_REPOSITORY_URI }}:${{ github.sha }} .
+          docker push ${{ secrets.ECR_WORKER_REPOSITORY_URI }}:${{ github.sha }}
+
+      - name: Build apps/web
+        run: |
+          npm ci
+          npm run build --workspace=@workout-logging/web
+
+      - name: Sync to S3
+        run: aws s3 sync apps/web/out s3://${{ secrets.S3_WEB_BUCKET }} --delete
+
+      - name: Invalidate CloudFront
+        run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+
+      - name: Deploy via SSM
+        run: |
+          cat > /tmp/deploy-script.sh <<'SCRIPT'
+          set -euo pipefail
+          export HOME=/root
+     
+          export IMAGE_TAG="__IMAGE_TAG__"
+          export ECR_API_REPOSITORY_URI="__ECR_API_REPOSITORY_URI__"
+          export ECR_WORKER_REPOSITORY_URI="__ECR_WORKER_REPOSITORY_URI__"
+          export DATABASE_URL=$(aws ssm get-parameter --name /workout-logging/DATABASE_URL --with-decryption --query Parameter.Value --output text)
+          export MONGO_URL=$(aws ssm get-parameter --name /workout-logging/MONGO_URL --with-decryption --query Parameter.Value --output text)
+          export RABBITMQ_URL=$(aws ssm get-parameter --name /workout-logging/RABBITMQ_URL --with-decryption --query Parameter.Value --output text)
+          export JWT_SECRET=$(aws ssm get-parameter --name /workout-logging/JWT_SECRET --with-decryption --query Parameter.Value --output text)
+          export ANTHROPIC_API_KEY=$(aws ssm get-parameter --name /workout-logging/ANTHROPIC_API_KEY --with-decryption --query Parameter.Value --output text)
+          export POSTGRES_PASSWORD=$(aws ssm get-parameter --name /workout-logging/POSTGRES_PASSWORD --with-decryption --query Parameter.Value --output text)
+          export MONGO_PASSWORD=$(aws ssm get-parameter --name /workout-logging/MONGO_PASSWORD --with-decryption --query Parameter.Value --output text)
+          export RABBITMQ_PASSWORD=$(aws ssm get-parameter --name /workout-logging/RABBITMQ_PASSWORD --with-decryption --query Parameter.Value --output text)
+
+          mkdir -p /root/.ssh
+          aws ssm get-parameter --name /workout-logging/DEPLOY_SSH_PRIVATE_KEY --with-decryption --query Parameter.Value --output text > /root/.ssh/deploy_key
+          chmod 600 /root/.ssh/deploy_key
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > /root/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i /root/.ssh/deploy_key -o IdentitiesOnly=yes'
+
+          REPO_DIR=/opt/workout-logging
+          if [ ! -d "$REPO_DIR/.git" ]; then
+            git clone git@github.com:apodoprosvetov/workout-logging.git "$REPO_DIR"
+          fi
+          cd "$REPO_DIR"
+          git fetch origin
+          git checkout "$IMAGE_TAG"
+          rm -f /root/.ssh/deploy_key
+
+          aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin ${ECR_API_REPOSITORY_URI%%/*}
+
+          cd infra
+          docker compose -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.prod.yml up -d worker
+
+          for svc in api-1 api-2; do
+            docker compose -f docker-compose.prod.yml up -d --no-deps "$svc"
+            healthy=""
+            for i in $(seq 1 30); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo starting)
+              if [ "$status" = "healthy" ]; then healthy=1; break; fi
+              sleep 2
+            done
+            [ -n "$healthy" ] || { echo "$svc failed health check"; exit 1; }
+          done
+
+          docker compose -f docker-compose.prod.yml up -d caddy
+          SCRIPT
+
+          sed -i "s#__IMAGE_TAG__#${{ github.sha }}#; s#__ECR_API_REPOSITORY_URI__#${{ secrets.ECR_API_REPOSITORY_URI }}#; s#__ECR_WORKER_REPOSITORY_URI__#${{ secrets.ECR_WORKER_REPOSITORY_URI }}#" /tmp/deploy-script.sh
+
+          # Builds a real JSON *file* rather than trying to shell-quote a
+          # multi-line script into --parameters commands="...": confirmed
+          # broken by testing directly against the live instance — command
+          # substitution + AWS CLI's shorthand parser mangled embedded
+          # newlines into literal "n" characters and merged every line into
+          # one broken command. --rawfile reads the script as one JSON
+          # string with no shell interpolation involved at all.
+          jq -n --rawfile script /tmp/deploy-script.sh '{commands: [$script]}' > /tmp/deploy-params.json
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+            --document-name "AWS-RunShellScript" \
+            --parameters file:///tmp/deploy-params.json \
+            --query 'Command.CommandId' --output text)
+
+          aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id ${{ secrets.EC2_INSTANCE_ID }} || {
+            aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id ${{ secrets.EC2_INSTANCE_ID }} --query 'StandardErrorContent' --output text
+            exit 1
+          }
+          aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id ${{ secrets.EC2_INSTANCE_ID }} --query 'StandardOutputContent' --output text
