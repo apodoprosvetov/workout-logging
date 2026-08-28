@@ -84,6 +84,23 @@ jobs:
 
           cd infra
           docker compose -f docker-compose.prod.yml pull
+
+          # Real gap found on the first live deploy: synchronize is false
+          # (packages/shared/src/db/typeorm.ts), so the schema only exists
+          # via migrations — nothing had ever run them against this
+          # database. Runs from the api image itself: it ships the
+          # compiled migrations (packages/shared/dist/db/migrations/*.js)
+          # and a plain (non-ts-node) typeorm CLI binary, so no dev
+          # tooling is needed even though T023 deliberately strips
+          # ts-node/typescript from the production image. `compose run`
+          # (not `up`) reuses api-1's image/environment for a one-off
+          # command — deliberately NOT --no-deps, so postgres (and the
+          # rest of api-1's depends_on) actually start and become healthy
+          # first, which matters on the very first-ever deploy when
+          # nothing is running yet.
+          docker compose -f docker-compose.prod.yml run --rm api-1 \
+            node_modules/.bin/typeorm migration:run -d packages/shared/dist/db/typeorm.js
+
           docker compose -f docker-compose.prod.yml up -d worker
 
           for svc in api-1 api-2; do
