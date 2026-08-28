@@ -86,10 +86,26 @@ jobs:
             CADDY_CONFIG_CHANGED=true
           fi
 
+          # Same idea for the datastore service definitions. `up -d worker`
+          # below runs with --no-deps, so nothing in a routine deploy ever
+          # touches postgres/mongo/redis/rabbitmq implicitly — a change to
+          # their compose config would otherwise silently recreate all four
+          # mid-rollout. Recreate them here, up front, only when the file
+          # actually changed (rare), so any blip lands before the app
+          # rollout rather than during it.
+          INFRA_CONFIG_CHANGED=false
+          if [ -n "$PREV_SHA" ] && ! git diff --quiet "$PREV_SHA" "$IMAGE_TAG" -- infra/docker-compose.prod.yml 2>/dev/null; then
+            INFRA_CONFIG_CHANGED=true
+          fi
+
           aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin ${ECR_API_REPOSITORY_URI%%/*}
 
           cd infra
           docker compose -f docker-compose.prod.yml pull
+
+          if [ "$INFRA_CONFIG_CHANGED" = true ]; then
+            docker compose -f docker-compose.prod.yml up -d postgres mongo redis rabbitmq
+          fi
 
           # Real gap found on the first live deploy: synchronize is false
           # (packages/shared/src/db/typeorm.ts), so the schema only exists
@@ -107,7 +123,7 @@ jobs:
           docker compose -f docker-compose.prod.yml run --rm api-1 \
             node_modules/.bin/typeorm migration:run -d packages/shared/dist/db/typeorm.js
 
-          docker compose -f docker-compose.prod.yml up -d worker
+          docker compose -f docker-compose.prod.yml up -d --no-deps worker
 
           for svc in api-1 api-2; do
             docker compose -f docker-compose.prod.yml up -d --no-deps "$svc"

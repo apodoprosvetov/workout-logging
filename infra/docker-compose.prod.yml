@@ -27,21 +27,36 @@ services:
       - /mnt/data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U workout_logging']
-      interval: 5s
+      # 30s steady-state, not 5s: these are start-once, run-for-hours
+      # datastores. A 5s probe just fills the logs with connection
+      # open/close churn (each `mongosh` invocation alone opens a whole
+      # driver connection pool) without catching a real outage any sooner
+      # than the app's own connection retries do. start_interval keeps the
+      # first-healthy detection fast so `depends_on: service_healthy`
+      # doesn't stall an api cold start by up to a full interval.
+      interval: 30s
+      start_period: 30s
+      start_interval: 2s
       timeout: 5s
       retries: 10
 
   mongo:
     image: mongo:7
     restart: unless-stopped
+    # --quiet suppresses mongod's per-connection "Connection accepted" /
+    # "Connection ended" INFO lines — the healthcheck's own pings were the
+    # bulk of the log volume.
+    command: ['--quiet']
     environment:
       MONGO_INITDB_ROOT_USERNAME: workout_logging
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
     volumes:
       - /mnt/data/mongo:/data/db
     healthcheck:
-      test: ['CMD', 'mongosh', '--eval', 'db.adminCommand("ping")']
-      interval: 5s
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand("ping")']
+      interval: 30s
+      start_period: 30s
+      start_interval: 2s
       timeout: 5s
       retries: 10
 
@@ -50,7 +65,9 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
-      interval: 5s
+      interval: 30s
+      start_period: 30s
+      start_interval: 2s
       timeout: 5s
       retries: 10
 
@@ -64,7 +81,9 @@ services:
       - /mnt/data/rabbitmq:/var/lib/rabbitmq
     healthcheck:
       test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
-      interval: 5s
+      interval: 30s
+      start_period: 30s
+      start_interval: 2s
       timeout: 5s
       retries: 10
 
