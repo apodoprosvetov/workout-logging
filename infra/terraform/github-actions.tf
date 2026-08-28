@@ -64,12 +64,20 @@ data "aws_iam_policy_document" "github_ssm_execution" {
   # (the target instance AND the document being run) — AWS's own SendCommand
   # IAM examples list both ARN patterns in one statement's resources, not
   # two separate statements. Scoped to this specific instance, not "*".
+  #
+  # Real failure on deploy.yml's first live run: AWS-RunShellScript is an
+  # AWS-owned public document, not one of ours — its real ARN has an EMPTY
+  # account-id segment (arn:aws:ssm:REGION::document/NAME), confirmed from
+  # the live AccessDenied error. The original pattern
+  # (.../${account_id}:document/*) only ever matched documents this
+  # account owns, never AWS's own managed ones — so it could never have
+  # worked for the one document this project actually uses.
   statement {
     effect  = "Allow"
     actions = ["ssm:SendCommand"]
     resources = [
       "arn:aws:ec2:eu-central-1:${data.aws_caller_identity.current.account_id}:instance/${aws_instance.web_server.id}",
-      "arn:aws:ssm:eu-central-1:${data.aws_caller_identity.current.account_id}:document/*"
+      "arn:aws:ssm:eu-central-1::document/AWS-RunShellScript"
     ]
   }
 
