@@ -77,8 +77,14 @@ jobs:
           fi
           cd "$REPO_DIR"
           git fetch origin
+          PREV_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
           git checkout "$IMAGE_TAG"
           rm -f /root/.ssh/deploy_key
+
+          CADDY_CONFIG_CHANGED=false
+          if [ -n "$PREV_SHA" ] && ! git diff --quiet "$PREV_SHA" "$IMAGE_TAG" -- infra/Caddyfile 2>/dev/null; then
+            CADDY_CONFIG_CHANGED=true
+          fi
 
           aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin ${ECR_API_REPOSITORY_URI%%/*}
 
@@ -114,7 +120,21 @@ jobs:
             [ -n "$healthy" ] || { echo "$svc failed health check"; exit 1; }
           done
 
+          # `up -d` is a no-op for a bind-mounted file's *content*: git
+          # checkout replaces Caddyfile via an atomic rename (new inode),
+          # but Caddy's existing bind mount stays pinned to the OLD inode
+          # until the container itself restarts - confirmed live: even
+          # `caddy reload` re-read the stale mounted path, not the real
+          # file, so a prior Caddyfile fix silently never took effect
+          # despite two full deploys. `docker restart` re-resolves the
+          # mount. Only restart when Caddyfile itself changed (not on every
+          # deploy) so routine app-only rollouts stay gap-free - Caddy is a
+          # single instance with no failover in front of it, so restarting
+          # it always causes a brief full-outage blip.
           docker compose -f docker-compose.prod.yml up -d caddy
+          if [ "$CADDY_CONFIG_CHANGED" = true ]; then
+            docker restart infra-caddy-1
+          fi
           SCRIPT
 
           sed -i "s#__IMAGE_TAG__#${{ github.sha }}#; s#__ECR_API_REPOSITORY_URI__#${{ secrets.ECR_API_REPOSITORY_URI }}#; s#__ECR_WORKER_REPOSITORY_URI__#${{ secrets.ECR_WORKER_REPOSITORY_URI }}#" /tmp/deploy-script.sh
