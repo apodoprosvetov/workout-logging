@@ -138,6 +138,16 @@ data "aws_iam_policy_document" "github_actions_s3_ecr_permissions" {
     ]
     resources = ["${aws_s3_bucket.web.arn}/*"]
   }
+
+  # Real gap found on deploy.yml's first live run: this role had no
+  # cloudfront:CreateInvalidation permission at all, so the post-S3-sync
+  # cache invalidation step failed with AccessDenied. Scoped to this one
+  # distribution, not "*".
+  statement {
+    effect    = "Allow"
+    actions   = ["cloudfront:CreateInvalidation"]
+    resources = [aws_cloudfront_distribution.web_distribution.arn]
+  }
 }
 
 # Create the IAM policy for SSM execution
