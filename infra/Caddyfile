@@ -4,5 +4,16 @@
 		health_uri /api/health
 		health_interval 5s
 		health_timeout 3s
+
+		# Real gap found via T027's formal rollout test: lb_try_duration
+		# defaults to 0 (retries disabled) — a request that happened to
+		# land on the exact replica mid-restart got an immediate 502
+		# instead of Caddy silently retrying the other (still-healthy)
+		# replica. Confirmed via live Caddy logs: 10 real 502s
+		# ("connection refused"), 5 during api-1's restart, 5 during
+		# api-2's — this is what research.md #7's "the other keeps
+		# serving" was supposed to guarantee but didn't, in practice.
+		lb_try_duration 5s
+		lb_try_interval 250ms
 	}
 }
