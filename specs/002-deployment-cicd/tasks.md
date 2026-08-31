@@ -177,7 +177,7 @@ need this phase at all.
 
 ### Implementation for User Story 4
 
-- [ ] T030 [US4] Add a manual `workflow_dispatch` trigger to `deploy.yml` (T025) accepting a commit SHA / image tag input, so it can redeploy a previous already-built version (ECR tags, S3 key prefix) through the exact same SSM/health-check path as a normal deploy, instead of building anything new (research.md #6)
+- [X] T030 [US4] Add a manual `workflow_dispatch` trigger to `deploy.yml` (T025) accepting a commit SHA / image tag input, so it can redeploy a previous already-built version (ECR tags, S3 key prefix) through the exact same SSM/health-check path as a normal deploy, instead of building anything new (research.md #6)
 - [ ] T031 [US4] Manually trigger `deploy.yml` against a previous commit SHA and confirm the live application matches that version's behavior within 10 minutes (SC-004) — the story's own Independent Test
 
 **Checkpoint**: User Stories 1–4 all work independently.

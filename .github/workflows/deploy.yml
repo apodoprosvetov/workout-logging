@@ -3,6 +3,13 @@ name: Deploy
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full 40-char commit SHA"
+        required: false
+        type: string
+        default: ''
 
 permissions:
   id-token: write # needs to be able to request an OIDC token from GitHub for AWS STS
@@ -14,6 +21,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.sha || github.sha }}
+
+      - name: Set target tag or SHA
+        run: |
+          TARGET_TAG="${{ github.event.inputs.sha || github.sha }}"
+          echo "TARGET_TAG=$TARGET_TAG" >> $GITHUB_ENV
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -24,18 +38,47 @@ jobs:
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Check if images already exist in ECR
+        id: ecr
+        run: |
+          set +e  # don't exit on non-zero, we read it ourselves
+          aws ecr describe-images --repository-name workout-logging-api \
+            --image-ids imageTag=$TARGET_TAG --region eu-central-1 >/dev/null 2>&1
+          api_exists=$?
+          aws ecr describe-images --repository-name workout-logging-worker \
+            --image-ids imageTag=$TARGET_TAG --region eu-central-1 >/dev/null 2>&1
+          worker_exists=$?
+
+          if [ $api_exists -eq 0 ] && [ $worker_exists -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "✅ images for $TARGET_TAG are already in ECR — we skip the build"
+          elif [ $api_exists -ne 0 ] && [ $worker_exists -ne 0 ]; then
+            if [ -n "${{ github.event.inputs.sha }}" ]; then
+              echo "::error::rollback target $TARGET_TAG not in ECR (expired by lifecycle policy, ecr.tf keeps only 2). Pick a newer SHA or bump countNumber."
+              exit 1
+            fi
+            echo "exists=false" >> "$GITHUB_OUTPUT"   # regular build
+          else
+            echo "::error::inconsistent ECR state for $TARGET_TAG (api=$api_exists worker=$worker_exists) — partial lifecycle policy cleanup possible"
+            exit 1
+          fi
+
       - name: Build and push apps/api
+        if: steps.ecr.outputs.exists != 'true'
         run: |
           docker build --platform linux/amd64 -f apps/api/Dockerfile \
-            -t ${{ secrets.ECR_API_REPOSITORY_URI }}:${{ github.sha }} .
-          docker push ${{ secrets.ECR_API_REPOSITORY_URI }}:${{ github.sha }}
+            -t ${{ secrets.ECR_API_REPOSITORY_URI }}:${{ env.TARGET_TAG }} .
+          docker push ${{ secrets.ECR_API_REPOSITORY_URI }}:${{ env.TARGET_TAG }}
 
       - name: Build and push apps/worker
+        if: steps.ecr.outputs.exists != 'true'
         run: |
           docker build --platform linux/amd64 -f apps/worker/Dockerfile \
-            -t ${{ secrets.ECR_WORKER_REPOSITORY_URI }}:${{ github.sha }} .
-          docker push ${{ secrets.ECR_WORKER_REPOSITORY_URI }}:${{ github.sha }}
+            -t ${{ secrets.ECR_WORKER_REPOSITORY_URI }}:${{ env.TARGET_TAG }} .
+          docker push ${{ secrets.ECR_WORKER_REPOSITORY_URI }}:${{ env.TARGET_TAG }}
 
+      # when rolling back, the web is rebuilt from the same SHA (deterministic static export),
+      # rather than restored from an archive, and this is a deliberate departure from research.md #6.
       - name: Build apps/web
         run: |
           npm ci
@@ -153,7 +196,7 @@ jobs:
           fi
           SCRIPT
 
-          sed -i "s#__IMAGE_TAG__#${{ github.sha }}#; s#__ECR_API_REPOSITORY_URI__#${{ secrets.ECR_API_REPOSITORY_URI }}#; s#__ECR_WORKER_REPOSITORY_URI__#${{ secrets.ECR_WORKER_REPOSITORY_URI }}#" /tmp/deploy-script.sh
+          sed -i "s#__IMAGE_TAG__#${{ env.TARGET_TAG }}#; s#__ECR_API_REPOSITORY_URI__#${{ secrets.ECR_API_REPOSITORY_URI }}#; s#__ECR_WORKER_REPOSITORY_URI__#${{ secrets.ECR_WORKER_REPOSITORY_URI }}#" /tmp/deploy-script.sh
 
           # Builds a real JSON *file* rather than trying to shell-quote a
           # multi-line script into --parameters commands="...": confirmed
