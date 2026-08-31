@@ -80,6 +80,8 @@ jobs:
       # when rolling back, the web is rebuilt from the same SHA (deterministic static export),
       # rather than restored from an archive, and this is a deliberate departure from research.md #6.
       - name: Build apps/web
+        env:
+          NEXT_PUBLIC_API_URL: /api
         run: |
           npm ci
           npm run build --workspace=@workout-logging/web
