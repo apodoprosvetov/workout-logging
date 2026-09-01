@@ -91,7 +91,7 @@ async function processWorkout(context: WorkerContext, manager: EntityManager, ev
           setOrder,
           weight: String(set.weight),
           reps: set.reps,
-          unit: set.unit === 'lb' ? SetUnit.KG : SetUnit.LB,
+          unit: set.unit === 'lb' ? SetUnit.LB : SetUnit.KG,
         }),
       );
     }
