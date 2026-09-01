@@ -21,6 +21,14 @@ resource "aws_instance" "web_server" {
   tags = {
     Name = "AL2023-From-SSM"
   }
+
+  # The AMI comes from the "latest AL2023" SSM pointer, which AWS moves
+  # every few weeks — without this, every plan after a new AMI release
+  # wants to replace this instance (and cascade-replace the EBS data
+  # volume with all the DB state). Rebuilds are deliberate, not automatic.
+  lifecycle {
+    ignore_changes = [ami]
+  }
 }
 
 # A plain auto-assigned public IP changes if the instance ever stops/starts,

@@ -48,3 +48,39 @@ resource "aws_s3_bucket_policy" "allow_cloudfront_access" {
     ]
   })
 }
+
+# Private S3 bucket for canary artifacts (research.md #8), readable only
+# by the canary's IAM role (monitoring.tf).
+resource "aws_s3_bucket" "canary_artifacts" {
+  # Bucket name includes the account ID since S3 bucket names must be
+  # globally unique across all of AWS, not just this account.
+  bucket = "workout-logging-canary-artifacts-${data.aws_caller_identity.current.account_id}"
+
+  tags = {
+    Name = "workout-logging-canary-artifacts"
+  }
+}
+
+# Public access fully blocked at every level 
+# — the only intended reader is the canary's IAM role (monitoring.tf).
+resource "aws_s3_bucket_public_access_block" "canary_artifacts" {
+  bucket = aws_s3_bucket.canary_artifacts.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "canary_artifacts" {
+  bucket = aws_s3_bucket.canary_artifacts.id
+
+  rule {
+    id     = "expire-canary-artifacts"
+    status = "Enabled"
+
+    expiration {
+      days = 7
+    }
+  }
+}

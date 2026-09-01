@@ -200,6 +200,16 @@ Each item below resolves one open technical question implied by spec.md
   "notify on failure" step at the end of `deploy.yml`. CloudWatch alarms
   only re-notify on a *state change* (OK → ALARM), satisfying FR-014
   without extra de-duplication logic.
+- **Revision (T033, 2026-09-01)**: (b) was dropped in favour of GitHub's
+  built-in workflow-failure email. For this single-maintainer repo the
+  GitHub account email is the same inbox as the SNS subscription, so the
+  native "Deploy — Failed" notification already meets FR-012 with zero
+  added IAM (`sns:Publish` on the OIDC role) or a new repo secret. Only
+  (a), the canary + alarm, is actually built. Accepted downsides: deploy
+  alerts and health alerts are no longer the same channel, and the
+  notification depends on per-account GitHub settings. Add (b) back if a
+  second maintainer joins or deploys become automation-triggered — see
+  the T033 note in tasks.md for the exact step.
 - **Rationale**: Stays entirely within AWS, reuses infrastructure
   already being provisioned via Terraform, and a canary hitting the
   CloudFront URL validates the whole path end-to-end, not just "is the

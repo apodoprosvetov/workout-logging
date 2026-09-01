@@ -33,3 +33,6 @@ crash.log
 # Logs
 *.log
 npm-debug.log*
+
+# Infra
+infra/terraform/canary/*.zip
