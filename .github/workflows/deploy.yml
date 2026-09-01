@@ -146,6 +146,11 @@ jobs:
           aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin ${ECR_API_REPOSITORY_URI%%/*}
 
           cd infra
+          # Reclaim space before pulling: every prior deploy leaves its old
+          # api/worker image behind, and the 8 GB root volume fills up
+          # (a real `no space left on device` on the pull, 2026-09-01).
+          # Safe — prune never touches an image with a running container.
+          docker image prune -af
           docker compose -f docker-compose.prod.yml pull
 
           if [ "$INFRA_CONFIG_CHANGED" = true ]; then
