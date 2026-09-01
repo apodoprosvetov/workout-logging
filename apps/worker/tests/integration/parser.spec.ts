@@ -191,7 +191,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     expect(Number(sets[0].weight)).toBe(80);
     expect(sets[0].reps).toBe(8);
     expect(sets[2].reps).toBe(6);
-    expect(sets[0].unit).toBe('kg');
+    expect(sets[0].unit).toBe('lb');
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     const parsedMsg = await channel.get(WORKOUT_ANALYTICS_QUEUE);
