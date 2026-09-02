@@ -37,9 +37,13 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
 
   // Revoke any still-live object URLs when the form unmounts. A ref mirrors the
   // current images so the unmount-only effect sees the latest list without
-  // re-running (and re-revoking URLs still in use) on every change.
+  // re-running (and re-revoking URLs still in use) on every change. The mirror
+  // is written in an effect, not during render — refs must not be touched while
+  // rendering.
   const imagesRef = useRef(images);
-  imagesRef.current = images;
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
   useEffect(() => {
     return () => {
       imagesRef.current.forEach((img) => URL.revokeObjectURL(img.preview));

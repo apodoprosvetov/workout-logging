@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { loadTokens } from '../lib/api-client';
 import { useIsAuthenticated } from '../lib/use-require-auth';
 
 // No content of its own — just routes to /dashboard (authenticated) or
@@ -11,7 +12,9 @@ export default function Home() {
   const authenticated = useIsAuthenticated();
 
   useEffect(() => {
-    router.replace(authenticated ? '/dashboard' : '/login');
+    // loadTokens() (not `authenticated`) so a refresh here doesn't flash
+    // through /login before useSyncExternalStore re-syncs — see useRequireAuth.
+    router.replace(loadTokens() !== null ? '/dashboard' : '/login');
   }, [authenticated, router]);
 
   return null;
