@@ -442,6 +442,14 @@ Phase 1 design can proceed without unknowns.
   `v4-pro`, which is why text-only stays on `v4-pro`. `ai_response_raw`
   is now populated (the full serialized model response, for debugging)
   on every parse, per research.md #11.
+- **Client-side validation is UX-only** (T046): `apps/web`'s upload
+  control rejects a wrong MIME type, >10MB, or >10 files before submit,
+  but this is **not** mirrored on the API — spec.md Clarifications Q4
+  keeps the endpoint accepting any file, and this branch's magic-byte
+  sniff + retry/DLQ path is the real "downstream error handling". An
+  empty `file.type` is let through client-side for the same reason (the
+  worker sniffs the bytes).
 - **Not covered here**: routing Telegram photo messages into ingestion
-  (T045) and the `apps/web` multi-file upload control (T046) — those
-  build on this branch but are their own tasks.
+  (T045). The `apps/web` multi-file upload control (T046) is done — one
+  unified text-and-images form (`log-workout-form.tsx`), submit enabled
+  on text or ≥1 image.
