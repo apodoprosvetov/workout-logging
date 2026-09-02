@@ -4,6 +4,7 @@ import {
   connectRabbitMq,
   createMongooseConnection,
   createTypeOrmDataSource,
+  downloadWorkoutImage,
   getWorkoutImagesBucket,
   setupRabbitMqTopology,
   uploadWorkoutImage,
@@ -24,6 +25,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { WorkerContext } from '../../src/index.js';
 import { registerParserConsumer } from '../../src/parser/handler.js';
 import { getDeathCount, handleParseFailure } from '../../src/parser/retry.js';
+
+// A real 1x1 PNG. Since T044 the parser sniffs each image's media type from its
+// magic bytes (image-media-type.ts) and rejects anything unrecognised into the
+// retry path, so the old `Buffer.from('fake-image-N')` placeholder no longer
+// survives a parse. Blank content is fine here: these tests assert the vision
+// branch runs and reaches a terminal status, not that a workout is legible in
+// the pixels (that's quickstart.md's manual US3 check).
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 // Skipped without a real ANTHROPIC_API_KEY: this suite calls the actual
 // Claude/DeepSeek API, so it can't run in CI (spec 002's ci.yml deliberately
@@ -116,13 +128,11 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
   ): Promise<{ workoutId: string; rawUploadRef: string; imageRefs: string[] }> {
     const bucket = getWorkoutImagesBucket(mongoConnection);
     const imageRefs = await Promise.all(
-      Array.from({ length: imageCount }, (_, i) =>
-        uploadWorkoutImage(bucket, Buffer.from(`fake-image-${i}`), `image-${i}.jpg`),
-      ),
+      Array.from({ length: imageCount }, (_, i) => uploadWorkoutImage(bucket, TINY_PNG, `image-${i}.png`)),
     );
     const rawUpload = await mongoConnection
       .model('RawUpload')
-      .create({ user_id: userId, text, image_refs: imageRefs, ai_response_raw: null });
+      .create({ user_id: userId, text: text || null, image_refs: imageRefs, ai_response_raw: null });
     const workout = await dataSource.getRepository(Workout).save(
       dataSource.getRepository(Workout).create({
         userId,
@@ -297,6 +307,53 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
       ])) as Array<{ count: number }>
     )[0].count;
     expect(countAfter).toBe(countBefore);
+  }, 25000);
+
+  // ---- T044: image / vision branch (research.md #8, #14) ----
+
+  it('downloadWorkoutImage round-trips the stored bytes, and rejects when the ref does not resolve', async () => {
+    const bucket = getWorkoutImagesBucket(mongoConnection);
+    const ref = await uploadWorkoutImage(bucket, TINY_PNG, 'roundtrip.png');
+
+    const back = await downloadWorkoutImage(bucket, ref);
+    expect(Buffer.compare(back, TINY_PNG)).toBe(0);
+
+    // A ref that doesn't resolve must reject (→ T032 retry/DLQ), not hang or
+    // resolve empty — images are guaranteed present until a terminal status.
+    await bucket.delete(new mongoConnection.base.mongo.ObjectId(ref));
+    await expect(downloadWorkoutImage(bucket, ref)).rejects.toThrow();
+    await expect(downloadWorkoutImage(bucket, 'not-a-valid-objectid')).rejects.toThrow();
+  });
+
+  it('parses a workout submitted as an image only (no text) via the vision model, and stores the raw AI response', async () => {
+    const { workoutId, rawUploadRef } = await seedWorkoutWithImages('', 1);
+    publishUploaded(workoutId, rawUploadRef);
+
+    // A terminal status means the vision call ran and returned, rather than
+    // throwing the image into the retry loop.
+    const status = await waitForStatus(workoutId);
+    expect(['parsed', 'needs_review']).toContain(status);
+
+    const rawUpload = await mongoConnection.model('RawUpload').findById(rawUploadRef);
+    const aiResponse = rawUpload?.get('ai_response_raw') as unknown;
+    expect(typeof aiResponse).toBe('string');
+    expect((aiResponse as string).length).toBeGreaterThan(0);
+  }, 25000);
+
+  it('combines text and an image into a single extraction call (research.md #8)', async () => {
+    const { workoutId, rawUploadRef } = await seedWorkoutWithImages('bench press 80kg x8, x8, x6', 1);
+    publishUploaded(workoutId, rawUploadRef);
+
+    const status = await waitForStatus(workoutId);
+    expect(['parsed', 'needs_review']).toContain(status);
+
+    // The text half of the combined call is unambiguous, so the catalogued
+    // bench-press movement should come through.
+    const [row] = (await dataSource.query(
+      `SELECT e.slug FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = $1`,
+      [workoutId],
+    )) as Array<{ slug: string }>;
+    expect(row?.slug).toBe('bench-press');
   }, 25000);
 
   it('deletes GridFS images once the workout reaches a terminal status (research.md #11)', async () => {

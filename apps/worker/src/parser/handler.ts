@@ -14,13 +14,15 @@ import {
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSE_QUEUE,
   WORKOUT_PARSED_ROUTING_KEY,
+  downloadWorkoutImage,
 } from '@workout-logging/shared';
 import type { ConsumeMessage } from 'amqplib';
 import type { EntityManager } from 'typeorm';
 import type { WorkerContext } from '../index.js';
-import { extractWorkoutFromText } from './claude.js';
+import { extractWorkout } from './claude.js';
 import { matchAndUpsertExercise } from './exercise-matcher.js';
 import { handleParseFailure } from './retry.js';
+import { detectImageMediaType, ImageMediaType } from './image-media-type.js';
 
 export function registerParserConsumer(context: WorkerContext): void {
   void context.channel.consume(
@@ -58,14 +60,30 @@ async function processWorkout(context: WorkerContext, manager: EntityManager, ev
     throw new Error(`workout ${event.workout_id} not found`);
   }
 
-  // Text-only this phase — T044 adds the image/vision branch (research.md #8:
-  // a single combined Claude request when both text and image are present).
-  const extracted = rawUpload.text
-    ? await extractWorkoutFromText(rawUpload.text)
-    : { name: null, performedAt: null, exercises: [] };
+  // T044: fetch every image the submission carried (research.md #11 — they're
+  // still in GridFS, cleanup only happens after a terminal status below) and
+  // sniff each one's media type from its bytes. An unreadable image throws,
+  // failing the parse into the T032 retry/DLQ path rather than quietly sending
+  // the model fewer images than the user submitted.
+  const imageBucket = getWorkoutImagesBucket(context.mongoConnection);
+  const imageBuffers = await Promise.all(
+    rawUpload.image_refs.map((ref) => downloadWorkoutImage(imageBucket, ref)),
+  );
+  const images = imageBuffers.map((buffer) => {
+    const mediaType: ImageMediaType | null = detectImageMediaType(buffer);
+    if (!mediaType) throw new Error('workout image has an unrecognised format');
+    return { data: buffer.toString('base64'), mediaType };
+  });
+
+  // research.md #8: one combined extraction call for whichever of text / images
+  // is present (research.md #14 — images route to the vision model).
+  const extracted = await extractWorkout({ text: rawUpload.text, images });
 
   const workoutExerciseRepository = manager.getRepository(WorkoutExercise);
   const setRepository = manager.getRepository(WorkoutSet);
+
+  rawUpload.ai_response_raw = extracted.rawResponse;
+  await rawUpload.save();
 
   let allMatched = true;
   let exerciseOrder = 0;

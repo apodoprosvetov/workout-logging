@@ -16,6 +16,7 @@ function errorMessage(status: number): string {
 export function LogTextForm({ onLogged }: LogTextFormProps) {
   const textId = useId();
   const dateId = useId();
+  const imageId = useId();
   const [text, setText] = useState('');
   const [performedAt, setPerformedAt] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +29,7 @@ export function LogTextForm({ onLogged }: LogTextFormProps) {
     try {
       const body = new FormData();
       body.set('text', text);
+      body.set('images', (document.getElementById(imageId) as HTMLInputElement).files?.[0] ?? '');
       if (performedAt) body.set('performed_at', performedAt);
 
       // FormData body: no content-type header here — fetch sets the correct
@@ -75,6 +77,25 @@ export function LogTextForm({ onLogged }: LogTextFormProps) {
         onChange={(e) => setPerformedAt(e.target.value)}
         className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
       />
+      <input
+        id={imageId}
+        type="file"
+        accept="image/*"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            if (file.size > 10 * 1024 * 1024) { // 10MB limit
+              setError('Image size exceeds 10MB limit.');
+              e.target.value = ''; // Clear the file input
+            } else {
+              setError(null); // Clear any previous error
+            }
+          }
+        }}
+        className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+      />
+      <p className="text-sm text-zinc-500 dark:text-zinc-400">Optional: attach an image of your workout.</p>
+      <p className="text-sm text-zinc-500 dark:text-zinc-400">Accepted formats: JPEG, PNG, GIF. Max size: 10MB.</p>
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <button
         type="submit"

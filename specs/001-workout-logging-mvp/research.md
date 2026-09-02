@@ -399,3 +399,49 @@ Phase 1 design can proceed without unknowns.
   to `/auth/register`, both sent with `Origin: http://localhost:3001`
   against a live `apps/api`, carry `access-control-allow-origin` in
   the response — confirmed missing before the fix, present after.
+
+## 14. Vision model for the image branch (found during T044)
+
+- **Finding**: the LLM provider chosen in research.md #9 —
+  `deepseek-v4-pro` via DeepSeek's Anthropic-compatible endpoint — is
+  **text-only**. T044's image/vision branch (`extractWorkout` with
+  `images`) sent well-formed Anthropic `image` content blocks and got
+  back, in the model's own thinking, *"the image is unsupported"*. The
+  endpoint accepts and forwards the block; the model just can't see it.
+  Verified with two live one-off calls (a 1×1 test PNG): `deepseek-v4-pro`
+  → "unsupported"; `deepseek-v4-flash-vision-exp` → correctly named the
+  colour.
+- **Decision**: `apps/worker/src/parser/claude.ts` picks the model per
+  request — `deepseek-v4-flash-vision-exp` (the only DeepSeek model with
+  vision) whenever the submission carries any images, `deepseek-v4-pro`
+  (unchanged, better at text reasoning) for text-only. A combined
+  text+image submission (research.md #8) goes to the vision model as one
+  call with the text folded into the same message.
+- **Confirmed compatible** (live): `deepseek-v4-flash-vision-exp` supports
+  the same `client.messages.stream()` + `.finalMessage()`, `tools` +
+  `tool_choice: {type: 'auto'}`, and `thinking`/`tool_use` response shape
+  as `deepseek-v4-pro`, so the existing `record_workout` parsing in
+  `claude.ts` is unchanged — only the model id and `max_tokens` differ.
+  Image blocks: base64 only (no `anthropic-beta` header needed — that's
+  only for the Files API `file_id` source), `user` messages only,
+  jpeg/png/gif/webp, 32 MiB / 600 images per request (far above
+  `MAX_WORKOUT_IMAGES = 10`), ~384 tokens billed per image.
+- **`media_type` is sniffed, not trusted**: uploads carry no validated
+  format (spec.md Clarifications Q4) and a GridFS filename isn't reliable,
+  so `apps/worker/src/parser/image-media-type.ts` detects the type from
+  magic bytes. An unrecognised image throws → the parse fails into the
+  T032 retry/DLQ path rather than silently dropping that image.
+- **`downloadWorkoutImage`** (`packages/shared/src/db/gridfs.ts`) does
+  **not** soft-swallow a missing file the way `deleteWorkoutImages` does:
+  it only runs while a workout is still being parsed, and research.md #11
+  guarantees images survive until a terminal status (across every retry),
+  so a ref that doesn't resolve is a real fault and rejects.
+- **Known risks**: `deepseek-v4-flash-vision-exp` is experimental
+  (`-exp`) — DeepSeek may change or withdraw it; a real fallback would be
+  a separate vision provider. Flash-tier text reasoning is below
+  `v4-pro`, which is why text-only stays on `v4-pro`. `ai_response_raw`
+  is now populated (the full serialized model response, for debugging)
+  on every parse, per research.md #11.
+- **Not covered here**: routing Telegram photo messages into ingestion
+  (T045) and the `apps/web` multi-file upload control (T046) — those
+  build on this branch but are their own tasks.

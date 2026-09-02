@@ -14,6 +14,13 @@ import { AuthModule } from '../../src/auth/auth.module';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
 import { createTestApp, deleteTestUsers, httpServer, testEmailFactory } from '../helpers/test-app';
 
+// A real 1x1 PNG — the parser worker (T044) rejects any image whose magic bytes
+// aren't a known format, so an upload fixture has to be a genuine image now.
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 describe('POST /workouts (contract, per contracts/api.md)', () => {
   let app: NestFastifyApplication;
   const emails = testEmailFactory('t030');
@@ -120,9 +127,9 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     const res = await request(httpServer(app))
       .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
-      .attach('images', Buffer.from('fake-image-bytes-1'), 'page1.jpg')
-      .attach('images', Buffer.from('fake-image-bytes-2'), 'page2.jpg')
-      .attach('images', Buffer.from('fake-image-bytes-3'), 'page3.jpg');
+      .attach('images', TINY_PNG, 'page1.png')
+      .attach('images', TINY_PNG, 'page2.png')
+      .attach('images', TINY_PNG, 'page3.png');
 
     expect(res.status).toBe(202);
 
@@ -139,11 +146,14 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     const rawUpload = await mongoConn.model('RawUpload').findById(row.raw_input_ref);
     const imageRefs = (rawUpload?.get('image_refs') ?? []) as string[];
     expect(imageRefs).toHaveLength(3);
-
-    // Prove they're real GridFS files, not just opaque strings written to the doc.
-    const bucket = getWorkoutImagesBucket(mongoConn);
-    const files = await bucket.find({ _id: { $in: imageRefs.map((id) => new mongoose.mongo.ObjectId(id)) } }).toArray();
-    expect(files).toHaveLength(3);
+    // Each ref is a real GridFS file id, not an opaque string. Not asserting the
+    // files still exist: image lifetime belongs to the parser worker (research.md
+    // #11 — it deletes them on a terminal status), and a running dev worker will
+    // already have consumed this event. That the bytes land in GridFS is proven
+    // race-free in apps/worker parser.spec.ts.
+    for (const ref of imageRefs) {
+      expect(mongoose.mongo.ObjectId.isValid(ref)).toBe(true);
+    }
     await mongoConn.close();
   });
 
@@ -151,7 +161,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     const { accessToken } = await registerAndGetToken('toomanyimages');
     let req = request(httpServer(app)).post('/api/workouts').set('authorization', `Bearer ${accessToken}`);
     for (let i = 0; i < 11; i++) {
-      req = req.attach('images', Buffer.from(`fake-image-bytes-${i}`), `page${i}.jpg`);
+      req = req.attach('images', TINY_PNG, `page${i}.png`);
     }
     const res = await req;
 
@@ -165,6 +175,46 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
       .post('/api/workouts')
       .set('authorization', `Bearer ${accessToken}`)
       .field('performed_at', new Date().toISOString());
+
+    expect(res.status).toBe(400);
+  });
+
+  it('treats an empty "images" field as no image: text-only submission, has_image false, no GridFS ref', async () => {
+    const { accessToken } = await registerAndGetToken('emptyimages');
+
+    // A client that always appends the field (or `curl -F 'images='`) sends it
+    // as an empty text part — must not become `['']` -> has_image true -> a junk
+    // 0-byte GridFS object (create-workout.dto.ts filters it).
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('text', 'bench press 80kg x8, x8, x6')
+      .field('images', '');
+
+    expect(res.status).toBe(202);
+
+    const ds = createTypeOrmDataSource();
+    await ds.initialize();
+    const [row] = (await ds.query('SELECT has_text, has_image, raw_input_ref FROM workouts WHERE id = $1', [
+      res.body.workout_id,
+    ])) as Array<{ has_text: boolean; has_image: boolean; raw_input_ref: string }>;
+    await ds.destroy();
+    expect(row.has_text).toBe(true);
+    expect(row.has_image).toBe(false);
+
+    const mongoConn = await createMongooseConnection();
+    const rawUpload = await mongoConn.model('RawUpload').findById(row.raw_input_ref);
+    expect((rawUpload?.get('image_refs') ?? []) as string[]).toHaveLength(0);
+    await mongoConn.close();
+  });
+
+  it('returns 400 when the only field is an empty "images" (no text)', async () => {
+    const { accessToken } = await registerAndGetToken('emptyimagesonly');
+
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('images', '');
 
     expect(res.status).toBe(400);
   });

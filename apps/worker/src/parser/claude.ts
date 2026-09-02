@@ -6,8 +6,26 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
   baseURL: 'https://api.deepseek.com/anthropic',
 });
-const MODEL = 'deepseek-v4-pro';
-const MAX_TOKENS = 1024;
+// research.md #14: deepseek-v4-pro is text-only. The image/vision branch has to
+// use deepseek-v4-flash-vision-exp (the only DeepSeek model with vision), so the
+// model is chosen per-request by whether any images are present.
+const MODEL_TEXT = 'deepseek-v4-pro';
+const MODEL_VISION = 'deepseek-v4-flash-vision-exp';
+
+// Output budget grows with input: 1024 is plenty for a text log, but a
+// multi-image submission (up to MAX_WORKOUT_IMAGES) needs more headroom.
+const MAX_TOKENS_TEXT = 1024;
+const MAX_TOKENS_FEW_IMAGES = 2048;
+const MAX_TOKENS_MANY_IMAGES = 4096;
+const MANY_IMAGES_THRESHOLD = 5;
+
+type ContentBlockParam = Anthropic.TextBlockParam | Anthropic.ImageBlockParam;
+type ImageMediaType = Anthropic.ImageBlockParam.Source['media_type'];
+
+export interface WorkoutImage {
+  data: string;
+  mediaType: ImageMediaType;
+}
 
 const RECORD_WORKOUT_TOOL: Anthropic.Tool = {
   name: 'record_workout',
@@ -72,6 +90,7 @@ export interface ExtractedExercise {
 }
 
 export interface ExtractedWorkout {
+  rawResponse: string;
   name: string | null;
   performedAt: string | null;
   exercises: ExtractedExercise[];
@@ -85,25 +104,64 @@ export interface ExtractedWorkout {
 // thinking by default, which doesn't support forcing a specific tool — so an
 // empty/no-tool-call response is a real, expected outcome (garbage input),
 // not an error, and maps to zero exercises extracted.
-export async function extractWorkoutFromText(text: string): Promise<ExtractedWorkout> {
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
+export async function extractWorkout({
+  text,
+  images,
+}: {
+  text: string | null;
+  images: WorkoutImage[] | null;
+}): Promise<ExtractedWorkout> {
+  const imageBlocks = images ?? [];
+  const logText = text?.trim() ?? '';
+
+  if (!logText && imageBlocks.length === 0) {
+    throw new Error('extractWorkout called with neither text nor images');
+  }
+
+  const hasImages = imageBlocks.length > 0;
+  const model = hasImages ? MODEL_VISION : MODEL_TEXT;
+  const maxTokens = !hasImages
+    ? MAX_TOKENS_TEXT
+    : imageBlocks.length > MANY_IMAGES_THRESHOLD
+      ? MAX_TOKENS_MANY_IMAGES
+      : MAX_TOKENS_FEW_IMAGES;
+
+  const content: ContentBlockParam[] = [
+    ...imageBlocks.map((image): Anthropic.ImageBlockParam => ({
+      type: 'image',
+      source: { type: 'base64', data: image.data, media_type: image.mediaType },
+    })),
+    {
+      type: 'text',
+      text:
+        'Extract the exercises, sets, reps, and weight from this workout log using the record_workout tool. ' +
+        'The log may be free text, one or more photos/screenshots, or both — read all of them as one workout. ' +
+        'Default to kg if no unit is given. For bodyweight-only sets with no weight mentioned, use weight 0 — ' +
+        'do not skip the set or make up a weight. Also extract the workout name/label and date if they literally ' +
+        `appear (do not guess or invent them).${logText ? `\n\n${logText}` : ''}`,
+    },
+  ];
+
+  const stream = client.messages.stream({
+    model,
+    max_tokens: maxTokens,
     tools: [RECORD_WORKOUT_TOOL],
     tool_choice: { type: 'auto' },
-    messages: [
-      {
-        role: 'user',
-        content: `Extract the exercises, sets, reps, and weight from this workout log using the record_workout tool. Default to kg if no unit is given. For bodyweight-only sets with no weight mentioned, use weight 0 — do not skip the set or make up a weight. Also extract the workout name/label and date if they literally appear in the text (do not guess or invent them).\n\n${text}`,
-      },
-    ],
+    messages: [{ role: 'user', content }],
   });
+
+  const response = await stream.finalMessage();
 
   const toolUse = response.content.find(
     (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
   );
   if (!toolUse) {
-    return { name: null, performedAt: null, exercises: [] };
+    return {
+      rawResponse: JSON.stringify(response, null, 2),
+      name: null,
+      performedAt: null,
+      exercises: [],
+    };
   }
 
   const input = toolUse.input as {
@@ -125,6 +183,7 @@ export async function extractWorkoutFromText(text: string): Promise<ExtractedWor
   const exercises = input.exercises;
 
   return {
+    rawResponse: JSON.stringify(response, null, 2),
     name: typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : null,
     performedAt: isValidIsoDate(input.performed_at) ? (input.performed_at as string) : null,
     exercises: (exercises as ExtractedExercise[])

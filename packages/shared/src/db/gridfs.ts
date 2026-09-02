@@ -34,6 +34,32 @@ export async function uploadWorkoutImage(
   });
 }
 
+// Unlike deleteWorkoutImages, this does NOT soft-swallow a missing file: it is
+// only ever called while a workout is still being parsed (before any terminal
+// status), and research.md #11 guarantees images survive until then — including
+// across every retry. A ref that doesn't resolve here is a real fault, so it
+// rejects and the parse fails into the T032 retry/DLQ path rather than silently
+// feeding the model fewer images than the user submitted.
+export async function downloadWorkoutImage(
+  bucket: InstanceType<typeof GridFSBucket>,
+  imageRef: string,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let downloadStream;
+    try {
+      // `new ObjectId(ref)` throws synchronously on a malformed hex string.
+      downloadStream = bucket.openDownloadStream(new ObjectId(imageRef));
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    downloadStream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    downloadStream.on('error', reject);
+    downloadStream.on('end', () => resolve(Buffer.concat(chunks)));
+  });
+}
+
 // Best-effort: called once a workout reaches a terminal status (parsed /
 // needs_review / failed-via-DLQ), never mid-retry. A ref already deleted
 // (e.g. a redelivered duplicate past withEventIdempotency) is not an error.

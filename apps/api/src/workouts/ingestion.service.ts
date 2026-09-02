@@ -49,10 +49,11 @@ export class IngestionService {
     // the workout reaches a terminal status (parser worker deletes them then)
     // — never retained long-term. Uploaded before the raw_uploads doc so a
     // GridFS failure surfaces as a clean 500 rather than a doc with dangling refs.
+    const workoutImageBucket = getWorkoutImagesBucket(this.mongoConnection);
     const imageRefs = input.imageBuffers
       ? await Promise.all(
           input.imageBuffers.map((buffer, index) =>
-            uploadWorkoutImage(getWorkoutImagesBucket(this.mongoConnection), buffer, `image-${index}`),
+            uploadWorkoutImage(workoutImageBucket, buffer, `image-${index}`),
           ),
         )
       : [];
