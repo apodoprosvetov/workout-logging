@@ -427,6 +427,25 @@ Phase 1 design can proceed without unknowns.
   on the two new FK indexes instead of seq-scanning; the list query
   shows `Index Scan Backward` on the composite index, no separate
   `Sort` node in the plan at all.
+- **Follow-up (T047, 2026-09-03)**: reviewing `computeWeeklyVolume`'s
+  query. Added `workout_exercises(exercise_id)` — the last un-indexed FK
+  on these tables (migration `AddExerciseIdIndexToWorkoutExercises`);
+  not needed by the weekly-volume query itself (its `we → e` join goes
+  via `exercises` PK) but spec-003's per-exercise history
+  (`WHERE we.exercise_id = X`) will need it, and an un-indexed FK also
+  forces a full scan on any `exercises` delete. **Not added**: a
+  `workouts(user_id, status, performed_at)` composite — `EXPLAIN` shows
+  the weekly query drives from `workouts` on the existing
+  `(user_id, performed_at)` index (one user, one week ≈ a handful of
+  rows) and filters `status` on those; `status` isn't selective enough
+  to earn a wider index. **Rejected**: replacing the JS-computed
+  `[monday, next_monday)` bounds with `date_trunc('week', performed_at)`
+  in SQL — that predicate isn't sargable against the `(user_id,
+  performed_at)` btree (would need a functional index), and
+  `date_trunc('week', timestamptz)` truncates in the session `TimeZone`
+  GUC rather than UTC, so it could silently disagree with
+  `isoWeekKey`'s UTC week label. The range-bounds form keeps the index
+  scan and the timezone explicit.
 
 ## 13. CORS (found during T035 — apps/web calling apps/api from a real browser)
 

@@ -176,9 +176,14 @@ deleted on account deletion.
   (FR-018).
 - `ratelimit:link:{user_id}` — counter, 5/hour (FR-005).
 - `weekly_volume:{user_id}:{iso_week}` — hash of `muscle_group →
-  volume`, updated by the analytics worker on `workout.parsed`
-  (FR-016), read by the dashboard (FR-017) with fallback to a Postgres
-  computation on cache miss.
+  volume` (`iso_week` = `YYYY-Www`), where volume = `Σ weight × reps`
+  over that week's `parsed`/`needs_review` workouts, full set volume
+  credited to every muscle group the exercise lists. The analytics
+  worker **fully recomputes and overwrites** the hash on every
+  `workout.parsed` for that week (T047, `computeWeeklyVolume` in
+  `packages/shared/src/analytics.ts`) — idempotent, self-corrects on
+  delete/re-parse. 120-day TTL. Read by the dashboard (FR-017) with the
+  same `computeWeeklyVolume` as a Postgres fallback on cache miss.
 
 ## Account Deletion (FR-021)
 

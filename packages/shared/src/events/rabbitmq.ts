@@ -1,6 +1,6 @@
 import { config as loadEnv } from 'dotenv';
 import path from 'node:path';
-import amqplib, { Channel, ChannelModel } from 'amqplib';
+import amqplib, { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
 import {
   WORKOUT_ANALYTICS_QUEUE,
   WORKOUT_DLQ,
@@ -43,6 +43,17 @@ export function retryTiersFor(primaryQueue: string): RetryTier[] {
 // or null once retries are exhausted (caller should route to WORKOUT_DLQ instead).
 export function retryQueueForAttempt(primaryQueue: string, attemptNumber: number): string | null {
   return retryTiersFor(primaryQueue)[attemptNumber - 1]?.queue ?? null;
+}
+
+// A worker sets this header when it routes a failed message to a retry tier;
+// RabbitMQ preserves it across the TTL dead-letter hop (unlike the reserved
+// x-death, which is stripped on any client publish — research.md #3). So the
+// counter is owned by the worker, not the broker.
+export const RETRY_ATTEMPT_HEADER = 'x-retry-attempt';
+
+export function getRetryAttempt(msg: ConsumeMessage): number {
+  const raw = msg.properties.headers?.[RETRY_ATTEMPT_HEADER];
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;
 }
 
 async function setupPrimaryQueue(channel: Channel, queue: string, routingKey: string): Promise<void> {

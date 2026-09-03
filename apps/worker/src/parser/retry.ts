@@ -1,7 +1,9 @@
 import {
   deleteWorkoutImages,
+  getRetryAttempt,
   getWorkoutImagesBucket,
   RawUploadDocument,
+  RETRY_ATTEMPT_HEADER,
   retryQueueForAttempt,
   Workout,
   WorkoutStatus,
@@ -13,31 +15,14 @@ import type { ConsumeMessage } from 'amqplib';
 import type { DataSource } from 'typeorm';
 import type { WorkerContext } from '../index.js';
 
+export { getRetryAttempt };
+
 // Thrown by processWorkout for a failure that retrying can never fix (a
 // raw_uploads doc or workout row that isn't there). handleMessage marks the
 // workout failed and acks instead of feeding it through the retry tiers —
 // 5s/30s/5m of re-attempts + a DLQ hop for something that will never succeed
 // is pure log noise.
 export class NonRetryableParseError extends Error {}
-
-const RETRY_ATTEMPT_HEADER = 'x-retry-attempt';
-
-// How many retry cycles this message has already been through, read from a
-// header the worker sets itself.
-//
-// research.md #4 originally leaned on RabbitMQ's `x-death` header for this, but
-// that only works for the *first* hop: handleParseFailure re-publishes the
-// message to the next tier with `sendToQueue`, and RabbitMQ strips the reserved
-// `x-death` on any client publish — so on the next dead-letter the count resets
-// and the message loops in one tier forever, never reaching the DLQ. A plain
-// custom header survives both the client publish and the TTL dead-letter hop,
-// so the worker owns the counter explicitly. The exchange is internal (only
-// apps/api publishes `workout.uploaded`), so "a client could forge it" isn't a
-// real concern here.
-export function getRetryAttempt(msg: ConsumeMessage): number {
-  const raw = msg.properties.headers?.[RETRY_ATTEMPT_HEADER];
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;
-}
 
 // Guarded transition, mirrored from handler.ts: only a still-pending workout
 // moves to failed, so a redelivered duplicate can't stomp a terminal status.

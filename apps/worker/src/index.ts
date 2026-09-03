@@ -3,35 +3,40 @@ import type { Channel } from 'amqplib';
 import {
   connectRabbitMq,
   createMongooseConnection,
+  createRedisClient,
   createTypeOrmDataSource,
   setupRabbitMqTopology,
 } from '@workout-logging/shared';
 import type { Connection as MongooseConnection } from 'mongoose';
+import type { Redis } from 'ioredis';
 import type { DataSource } from 'typeorm';
 import { registerParserConsumer } from './parser/handler.js';
+import { registerAnalyticsConsumer } from './analytics/handler.js';
 
 export interface WorkerContext {
   dataSource: DataSource;
   mongoConnection: MongooseConnection;
   channel: Channel;
+  redis: Redis;
 }
 
-// Populated by later tasks (T031 parser handler, T047 analytics handler) — each
-// pushes a function here that calls channel.consume() for its own queue.
+// Each consumer pushes a function here that calls channel.consume() for its
+// own queue (T031 parser, T047 analytics).
 type ConsumerRegistration = (context: WorkerContext) => void;
-const consumers: ConsumerRegistration[] = [registerParserConsumer];
+const consumers: ConsumerRegistration[] = [registerParserConsumer, registerAnalyticsConsumer];
 
 async function bootstrap(): Promise<void> {
   const dataSource = createTypeOrmDataSource();
   await dataSource.initialize();
 
   const mongoConnection = await createMongooseConnection();
+  const redis = createRedisClient();
 
   const connection = await connectRabbitMq();
   const channel = await connection.createChannel();
   await setupRabbitMqTopology(channel);
 
-  const context: WorkerContext = { dataSource, mongoConnection, channel };
+  const context: WorkerContext = { dataSource, mongoConnection, channel, redis };
   for (const register of consumers) {
     register(context);
   }
@@ -49,6 +54,7 @@ async function bootstrap(): Promise<void> {
     await channel.close();
     await connection.close();
     await mongoConnection.close();
+    redis.disconnect();
     await dataSource.destroy();
     process.exit(0);
   };

@@ -19,6 +19,9 @@ export class WorkoutExercise {
   @JoinColumn({ name: 'workout_id' })
   workout!: Workout;
 
+  // Indexed for per-exercise analytics (spec 003) and FK-delete integrity —
+  // see AddExerciseIdIndexToWorkoutExercises. TypeORM doesn't index FKs itself.
+  @Index()
   @Column()
   exerciseId!: string;
 

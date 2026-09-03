@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   connectRabbitMq,
   createMongooseConnection,
+  createRedisClient,
   createTypeOrmDataSource,
   downloadWorkoutImage,
   getWorkoutImagesBucket,
@@ -18,9 +19,11 @@ import {
   WORKOUT_DLQ,
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSE_QUEUE,
+  WORKOUT_PARSED_ROUTING_KEY,
   WORKOUT_UPLOADED_ROUTING_KEY,
 } from '@workout-logging/shared';
 import type { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
+import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
 import type { DataSource } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -34,6 +37,8 @@ import { getRetryAttempt, handleParseFailure } from '../../src/parser/retry.js';
 // survives a parse. Blank content is fine here: these tests assert the vision
 // branch runs and reaches a terminal status, not that a workout is legible in
 // the pixels (that's quickstart.md's manual US3 check).
+const PARSED_MIRROR_QUEUE = 'test.parser.parsed-mirror';
+
 const TINY_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
   'base64',
@@ -51,6 +56,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
   let mongoConnection: MongooseConnection;
   let amqpConnection: ChannelModel;
   let channel: Channel;
+  let redis: Redis;
   let context: WorkerContext;
   let userId: string;
 
@@ -67,8 +73,16 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     channel = await amqpConnection.createChannel();
     await setupRabbitMqTopology(channel);
     await purgeAllWorkoutQueues();
+    redis = createRedisClient();
 
-    context = { dataSource, mongoConnection, channel };
+    // Own copy of every workout.parsed — so "the parser published it" can be
+    // asserted regardless of what else (a running dev analytics worker, T047)
+    // is draining the real workout.analytics.q.
+    await channel.assertQueue(PARSED_MIRROR_QUEUE, { durable: false });
+    await channel.bindQueue(PARSED_MIRROR_QUEUE, WORKOUT_EVENTS_EXCHANGE, WORKOUT_PARSED_ROUTING_KEY);
+    await channel.purgeQueue(PARSED_MIRROR_QUEUE);
+
+    context = { dataSource, mongoConnection, channel, redis };
     registerParserConsumer(context);
 
     const user = await dataSource.getRepository(User).save(
@@ -96,9 +110,11 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
 
     await mongoConnection.model('RawUpload').deleteMany({ user_id: userId });
     await mongoConnection.close();
+    redis.disconnect();
 
     await purgeAllWorkoutQueues();
     await channel.deleteQueue('test.scratch.retry-routing').catch(() => undefined);
+    await channel.deleteQueue(PARSED_MIRROR_QUEUE).catch(() => undefined);
     await channel.close();
     await amqpConnection.close();
   });
@@ -184,6 +200,26 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     );
   }
 
+  // Drains PARSED_MIRROR_QUEUE (which gets its own copy of every workout.parsed,
+  // so it's immune to the real workout.analytics.q's consumers) looking for the
+  // event for `workoutId`, tolerating other tests' events and publish latency.
+  async function drainMirrorFor(
+    workoutId: string,
+    timeoutMs = 5000,
+  ): Promise<{ workout_id: string; exercise_count: number } | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const msg = await channel.get(PARSED_MIRROR_QUEUE, { noAck: true });
+      if (msg) {
+        const event = JSON.parse(msg.content.toString()) as { workout_id: string; exercise_count: number };
+        if (event.workout_id === workoutId) return event;
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return null;
+  }
+
   async function waitForStatus(workoutId: string, timeoutMs = 20000): Promise<string> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -222,13 +258,9 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     expect(sets[2].reps).toBe(6);
     expect(sets[0].unit).toBe('kg');
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const parsedMsg = await channel.get(WORKOUT_ANALYTICS_QUEUE);
-    if (!parsedMsg) throw new Error('expected a message on workout.analytics.q');
-    const parsedEvent = JSON.parse(parsedMsg.content.toString()) as { workout_id: string; exercise_count: number };
-    expect(parsedEvent.workout_id).toBe(workoutId);
-    expect(parsedEvent.exercise_count).toBe(1);
-    channel.ack(parsedMsg);
+    const parsedEvent = await drainMirrorFor(workoutId);
+    expect(parsedEvent, 'no workout.parsed event for this workout').not.toBeNull();
+    expect(parsedEvent?.exercise_count).toBe(1);
   }, 25000);
 
   it('records weight 0 for a bodyweight set with no weight mentioned, rather than dropping it or inventing a value', async () => {

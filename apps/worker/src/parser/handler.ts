@@ -38,9 +38,20 @@ export function registerParserConsumer(context: WorkerContext): void {
 async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promise<void> {
   const event = JSON.parse(msg.content.toString()) as WorkoutUploadedEvent;
   try {
-    await withEventIdempotency(context.dataSource, event.event_id, (manager) =>
+    const outcome = await withEventIdempotency(context.dataSource, event.event_id, (manager) =>
       processWorkout(context, manager, event),
     );
+    // Publish workout.parsed only after the transaction has committed — an event
+    // about a state that could still roll back would race the analytics worker
+    // (T047) into recomputing a week that doesn't include this workout yet.
+    if (!outcome.alreadyProcessed) {
+      context.channel.publish(
+        WORKOUT_EVENTS_EXCHANGE,
+        WORKOUT_PARSED_ROUTING_KEY,
+        Buffer.from(JSON.stringify(outcome.result)),
+        { persistent: true },
+      );
+    }
     context.channel.ack(msg);
   } catch (err) {
     if (err instanceof NonRetryableParseError) {
@@ -60,7 +71,11 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
   }
 }
 
-async function processWorkout(context: WorkerContext, manager: EntityManager, event: WorkoutUploadedEvent): Promise<void> {
+async function processWorkout(
+  context: WorkerContext,
+  manager: EntityManager,
+  event: WorkoutUploadedEvent,
+): Promise<WorkoutParsedEvent> {
   const rawUploadModel = context.mongoConnection.model<RawUploadDocument>('RawUpload');
   const rawUpload = await rawUploadModel.findById(event.raw_upload_ref);
   if (!rawUpload) {
@@ -162,12 +177,6 @@ async function processWorkout(context: WorkerContext, manager: EntityManager, ev
     exercise_count: extracted.exercises.length,
     occurred_at: new Date().toISOString(),
   };
-  context.channel.publish(
-    WORKOUT_EVENTS_EXCHANGE,
-    WORKOUT_PARSED_ROUTING_KEY,
-    Buffer.from(JSON.stringify(parsedEvent)),
-    { persistent: true },
-  );
 
   // Images are transient (research.md #11) — this is a terminal status
   // (parsed/needs_review), so nothing will read raw_uploads' images again.
@@ -179,4 +188,6 @@ async function processWorkout(context: WorkerContext, manager: EntityManager, ev
       console.error(`failed to delete workout_images for raw_upload ${rawUpload._id.toString()}`, err);
     }
   }
+
+  return parsedEvent;
 }
