@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { mongoUri, typeOrmDataSourceOptions } from '@workout-logging/shared';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { WorkoutsModule } from './workouts/workouts.module';
@@ -19,6 +20,7 @@ import { WorkoutsModule } from './workouts/workouts.module';
     AuthModule,
     WorkoutsModule,
     HealthModule,
+    AnalyticsModule,
   ],
 })
 export class AppModule {}

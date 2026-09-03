@@ -34,6 +34,23 @@ export function weeklyVolumeRedisKey(userId: string, isoWeek: string): string {
   return `weekly_volume:${userId}:${isoWeek}`;
 }
 
+// Monday 00:00 UTC of the given ISO week (`YYYY-Www`) — the inverse of
+// isoWeekKey, for turning a `?week=` query param back into a date to feed
+// computeWeeklyVolume. Throws on a malformed string.
+export function isoWeekToDate(isoWeek: string): Date {
+  const match = /^(\d{4})-W(\d{2})$/.exec(isoWeek);
+  if (!match) throw new Error(`invalid ISO week: ${isoWeek}`);
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  // Jan 4 is always in ISO week 1; walk back to that week's Monday, then forward.
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7));
+  const target = new Date(week1Monday);
+  target.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
+  return target;
+}
+
 // FR-016: training volume (Σ weight × reps) per muscle group for one user in the
 // ISO week containing `weekDate`. Every muscle group an exercise lists gets the
 // full set volume (a per-group split is a spec-003 refinement). Sets whose
