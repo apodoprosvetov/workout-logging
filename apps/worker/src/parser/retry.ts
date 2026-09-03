@@ -10,15 +10,44 @@ import {
   WORKOUT_PARSE_QUEUE,
 } from '@workout-logging/shared';
 import type { ConsumeMessage } from 'amqplib';
+import type { DataSource } from 'typeorm';
 import type { WorkerContext } from '../index.js';
 
-// How many retry-tier round trips this message has already completed
-// (research.md #4's `x-death` header, populated by RabbitMQ itself on each
-// TTL-driven dead-letter hop — broker-managed, can't be forged by a client on a
-// plain publish, which is exactly why this is split out as its own pure step).
-export function getDeathCount(msg: ConsumeMessage): number {
-  const xDeath = msg.properties.headers?.['x-death'] as unknown[] | undefined;
-  return Array.isArray(xDeath) ? xDeath.length : 0;
+// Thrown by processWorkout for a failure that retrying can never fix (a
+// raw_uploads doc or workout row that isn't there). handleMessage marks the
+// workout failed and acks instead of feeding it through the retry tiers —
+// 5s/30s/5m of re-attempts + a DLQ hop for something that will never succeed
+// is pure log noise.
+export class NonRetryableParseError extends Error {}
+
+const RETRY_ATTEMPT_HEADER = 'x-retry-attempt';
+
+// How many retry cycles this message has already been through, read from a
+// header the worker sets itself.
+//
+// research.md #4 originally leaned on RabbitMQ's `x-death` header for this, but
+// that only works for the *first* hop: handleParseFailure re-publishes the
+// message to the next tier with `sendToQueue`, and RabbitMQ strips the reserved
+// `x-death` on any client publish — so on the next dead-letter the count resets
+// and the message loops in one tier forever, never reaching the DLQ. A plain
+// custom header survives both the client publish and the TTL dead-letter hop,
+// so the worker owns the counter explicitly. The exchange is internal (only
+// apps/api publishes `workout.uploaded`), so "a client could forge it" isn't a
+// real concern here.
+export function getRetryAttempt(msg: ConsumeMessage): number {
+  const raw = msg.properties.headers?.[RETRY_ATTEMPT_HEADER];
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;
+}
+
+// Guarded transition, mirrored from handler.ts: only a still-pending workout
+// moves to failed, so a redelivered duplicate can't stomp a terminal status.
+export async function markWorkoutFailed(dataSource: DataSource, workoutId: string): Promise<void> {
+  await dataSource
+    .createQueryBuilder()
+    .update(Workout)
+    .set({ status: WorkoutStatus.FAILED })
+    .where('id = :id AND status = :pendingStatus', { id: workoutId, pendingStatus: WorkoutStatus.PENDING })
+    .execute();
 }
 
 // research.md #3: 3 retry attempts (5s/30s/5m) before workout.dlq + marking the
@@ -26,27 +55,26 @@ export function getDeathCount(msg: ConsumeMessage): number {
 // nacking — the backoff is TTL-based (a retry queue's own expiry dead-letters the
 // message back onto workout.parse.q), not RabbitMQ's native immediate requeue.
 // attemptNumber defaults to derived-from-the-message (real usage); the explicit
-// parameter exists so the retry-tier decision is testable without needing to
-// fake a broker-managed header.
+// parameter exists so the retry-tier decision is testable without a broker hop.
 export async function handleParseFailure(
   context: WorkerContext,
   msg: ConsumeMessage,
   event: WorkoutUploadedEvent,
-  attemptNumber: number = getDeathCount(msg) + 1,
+  attemptNumber: number = getRetryAttempt(msg) + 1,
 ): Promise<void> {
   const retryQueue = retryQueueForAttempt(WORKOUT_PARSE_QUEUE, attemptNumber);
 
   if (retryQueue) {
-    context.channel.sendToQueue(retryQueue, msg.content, { persistent: true });
+    // Carry the attempt counter forward — it survives the TTL dead-letter hop
+    // back to workout.parse.q, so the next failure lands one tier deeper.
+    context.channel.sendToQueue(retryQueue, msg.content, {
+      persistent: true,
+      headers: { [RETRY_ATTEMPT_HEADER]: attemptNumber },
+    });
   } else {
     context.channel.sendToQueue(WORKOUT_DLQ, msg.content, { persistent: true });
     try {
-      await context.dataSource
-        .createQueryBuilder()
-        .update(Workout)
-        .set({ status: WorkoutStatus.FAILED })
-        .where('id = :id AND status = :pendingStatus', { id: event.workout_id, pendingStatus: WorkoutStatus.PENDING })
-        .execute();
+      await markWorkoutFailed(context.dataSource, event.workout_id);
     } catch (err) {
       // Best-effort per contracts/events.md — the DLQ message is still the
       // source of truth for manual recovery even if this write fails too.

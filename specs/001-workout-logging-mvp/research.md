@@ -110,6 +110,27 @@ Phase 1 design can proceed without unknowns.
   immediate retry (would violate "backoff" in design-notes.md's
   non-functional section and could hot-loop against a struggling Claude
   API).
+- **Attempt-count bug + fix (2026-09-03)**: the retry-tier decision
+  originally read RabbitMQ's `x-death` header (the count of TTL
+  dead-letter hops). That only works for the *first* hop — `retry.ts`
+  re-publishes the failed message to the next tier with `sendToQueue`,
+  and RabbitMQ strips the reserved `x-death` on any client publish, so
+  on the next dead-letter the count resets to 1 and the message loops
+  in `workout.parse.q.retry.30s` forever: never reaching the 5m tier,
+  never the DLQ, the workout stuck `pending`, one "parse failed" log
+  line every 30s. Found in local dev with ~73 stale test events
+  grinding for over a day. Fixed by carrying an explicit
+  `x-retry-attempt` integer header that the worker sets itself and
+  RabbitMQ preserves across the dead-letter hop (`getRetryAttempt` /
+  `handleParseFailure` in `apps/worker/src/parser/retry.ts`). The
+  exchange is internal (only `apps/api` publishes `workout.uploaded`),
+  so "a client could forge the counter" isn't a real concern. Also:
+  a failure that retrying can never fix — a missing `raw_uploads` doc
+  or `workouts` row — now throws `NonRetryableParseError`, which
+  `handler.ts` turns into an immediate `failed` + ack instead of
+  4 pointless retry attempts. Regression tests: `parser.spec.ts`
+  "walks the tiers via the default parameter" and "the x-retry-attempt
+  header survives a real TTL dead-letter hop".
 
 ## 4. Idempotent event processing (FR-014)
 

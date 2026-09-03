@@ -21,7 +21,7 @@ import type { EntityManager } from 'typeorm';
 import type { WorkerContext } from '../index.js';
 import { extractWorkout } from './claude.js';
 import { matchAndUpsertExercise } from './exercise-matcher.js';
-import { handleParseFailure } from './retry.js';
+import { handleParseFailure, markWorkoutFailed, NonRetryableParseError } from './retry.js';
 import { detectImageMediaType, ImageMediaType } from './image-media-type.js';
 
 export function registerParserConsumer(context: WorkerContext): void {
@@ -43,6 +43,18 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
     );
     context.channel.ack(msg);
   } catch (err) {
+    if (err instanceof NonRetryableParseError) {
+      // Nothing to parse and retrying won't change that — mark failed and drop
+      // it rather than looping it through the retry tiers.
+      console.error(`parse abandoned for workout ${event.workout_id}: ${err.message}`);
+      try {
+        await markWorkoutFailed(context.dataSource, event.workout_id);
+      } catch (markErr) {
+        console.error(`failed to mark workout ${event.workout_id} as failed`, markErr);
+      }
+      context.channel.ack(msg);
+      return;
+    }
     console.error(`parse failed for workout ${event.workout_id}`, err);
     await handleParseFailure(context, msg, event);
   }
@@ -52,12 +64,15 @@ async function processWorkout(context: WorkerContext, manager: EntityManager, ev
   const rawUploadModel = context.mongoConnection.model<RawUploadDocument>('RawUpload');
   const rawUpload = await rawUploadModel.findById(event.raw_upload_ref);
   if (!rawUpload) {
-    throw new Error(`raw_uploads/${event.raw_upload_ref} not found`);
+    // Never transient: ingestion.service.ts commits the raw_uploads doc before
+    // it publishes workout.uploaded, so "not found" means it was deleted (or
+    // this is a stale event from a wiped test run) — not "not written yet".
+    throw new NonRetryableParseError(`raw_uploads/${event.raw_upload_ref} not found`);
   }
 
   const workoutRow = await manager.getRepository(Workout).findOneBy({ id: event.workout_id });
   if (!workoutRow) {
-    throw new Error(`workout ${event.workout_id} not found`);
+    throw new NonRetryableParseError(`workout ${event.workout_id} not found`);
   }
 
   // T044: fetch every image the submission carried (research.md #11 — they're

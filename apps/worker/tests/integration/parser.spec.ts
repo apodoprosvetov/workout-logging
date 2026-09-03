@@ -6,6 +6,7 @@ import {
   createTypeOrmDataSource,
   downloadWorkoutImage,
   getWorkoutImagesBucket,
+  retryTiersFor,
   setupRabbitMqTopology,
   uploadWorkoutImage,
   User,
@@ -24,7 +25,7 @@ import type { DataSource } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { WorkerContext } from '../../src/index.js';
 import { registerParserConsumer } from '../../src/parser/handler.js';
-import { getDeathCount, handleParseFailure } from '../../src/parser/retry.js';
+import { getRetryAttempt, handleParseFailure } from '../../src/parser/retry.js';
 
 // A real 1x1 PNG. Since T044 the parser sniffs each image's media type from its
 // magic bytes (image-media-type.ts) and rejects anything unrecognised into the
@@ -59,9 +60,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     amqpConnection = await connectRabbitMq();
     channel = await amqpConnection.createChannel();
     await setupRabbitMqTopology(channel);
-    await channel.purgeQueue(WORKOUT_PARSE_QUEUE);
-    await channel.purgeQueue(WORKOUT_ANALYTICS_QUEUE);
-    await channel.purgeQueue(WORKOUT_DLQ);
+    await purgeAllWorkoutQueues();
 
     context = { dataSource, mongoConnection, channel };
     registerParserConsumer(context);
@@ -92,13 +91,27 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     await mongoConnection.model('RawUpload').deleteMany({ user_id: userId });
     await mongoConnection.close();
 
-    await channel.purgeQueue(WORKOUT_PARSE_QUEUE);
-    await channel.purgeQueue(WORKOUT_ANALYTICS_QUEUE);
-    await channel.purgeQueue(WORKOUT_DLQ);
+    await purgeAllWorkoutQueues();
     await channel.deleteQueue('test.scratch.retry-routing').catch(() => undefined);
     await channel.close();
     await amqpConnection.close();
   });
+
+  // Clears the primary queues, the DLQ, *and* every retry tier — a failed parse
+  // left mid-cycle in workout.parse.q.retry.30s would otherwise keep spamming
+  // "not found" against a wiped DB long after the suite finishes.
+  async function purgeAllWorkoutQueues(): Promise<void> {
+    const names = [
+      WORKOUT_PARSE_QUEUE,
+      WORKOUT_ANALYTICS_QUEUE,
+      WORKOUT_DLQ,
+      ...retryTiersFor(WORKOUT_PARSE_QUEUE).map((t) => t.queue),
+      ...retryTiersFor(WORKOUT_ANALYTICS_QUEUE).map((t) => t.queue),
+    ];
+    for (const name of names) {
+      await channel.purgeQueue(name).catch(() => undefined);
+    }
+  }
 
   async function seedWorkout(
     text: string,
@@ -381,14 +394,12 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     // handleParseFailure calls channel.ack(msg) internally, which requires a real
     // delivery tag — a hand-built ConsumeMessage object doesn't have one, and
     // acking it crashes the whole channel with a 406 (learned the hard way: this
-    // took down the rest of the suite the first time). RabbitMQ also strips any
-    // client-supplied x-death header on a plain publish (broker-managed, verified
-    // directly — an array of fake death records round-trips as an empty array).
-    // So: deliver a real message for a valid delivery tag, and pass attemptNumber
-    // explicitly (retry.ts's optional parameter, added for exactly this).
-    async function deliverScratchMessage(): Promise<ConsumeMessage> {
+    // took down the rest of the suite the first time). So: deliver a real message
+    // for a valid delivery tag. `headers` lets a test seed the x-retry-attempt
+    // counter the way a real dead-letter hop would.
+    async function deliverScratchMessage(headers?: Record<string, unknown>): Promise<ConsumeMessage> {
       await channel.assertQueue(SCRATCH_QUEUE, { durable: false, autoDelete: true });
-      channel.sendToQueue(SCRATCH_QUEUE, Buffer.from('{}'), { persistent: false });
+      channel.sendToQueue(SCRATCH_QUEUE, Buffer.from('{}'), { persistent: false, headers });
       await new Promise((resolve) => setTimeout(resolve, 150));
       const msg = await channel.get(SCRATCH_QUEUE);
       if (!msg) throw new Error('expected a message on the scratch queue');
@@ -448,29 +459,71 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
       expect(files).toHaveLength(0);
     });
 
-    it('getDeathCount reads a real broker-populated x-death header correctly (the default-parameter code path)', async () => {
-      // Real TTL round trip (T017 already proved this mechanism) — not a fake
-      // header, since RabbitMQ strips client-supplied x-death on a plain publish.
-      const msg1 = await deliverScratchMessage();
-      expect(getDeathCount(msg1)).toBe(0);
+    it('walks the tiers via the default parameter: x-retry-attempt N drives the (N+1)th tier and is carried forward', async () => {
+      // The bug this guards against: handleParseFailure used to re-publish the
+      // bare body, so the attempt counter reset every hop and the message looped
+      // in workout.parse.q.retry.30s forever, never reaching the DLQ.
+      await channel.purgeQueue('workout.parse.q.retry.5m');
+      const { workoutId } = await seedWorkout('routing test 4');
+      const event = { event_id: randomUUID(), user_id: userId, workout_id: workoutId, raw_upload_ref: 'x', occurred_at: '' };
 
-      await channel.assertQueue('test.scratch.retry-routing.5s', {
+      const msg = await deliverScratchMessage({ 'x-retry-attempt': 2 });
+      expect(getRetryAttempt(msg)).toBe(2);
+
+      await handleParseFailure(context, msg, event); // no explicit attemptNumber → getRetryAttempt(2) + 1 = 3
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const routed = await channel.get('workout.parse.q.retry.5m');
+      expect(routed).not.toBe(false);
+      if (routed) {
+        expect(getRetryAttempt(routed)).toBe(3);
+        channel.ack(routed);
+      }
+    });
+
+    it('the x-retry-attempt header survives a real TTL dead-letter hop (unlike x-death)', async () => {
+      // RabbitMQ strips its reserved x-death on a client publish, which is why
+      // the counter lives in a plain header instead. Scratch queues (not the
+      // real workout.parse.q — the live worker would eat the probe).
+      const scratchTtl = 'test.scratch.retry-attempt.5s';
+      await channel.assertQueue(SCRATCH_QUEUE, { durable: false, autoDelete: true });
+      await channel.assertQueue(scratchTtl, {
         durable: false,
         autoDelete: true,
         messageTtl: 5000,
         deadLetterExchange: '',
         deadLetterRoutingKey: SCRATCH_QUEUE,
       });
-      channel.sendToQueue('test.scratch.retry-routing.5s', msg1.content, { persistent: false });
-      channel.ack(msg1);
+      channel.sendToQueue(scratchTtl, Buffer.from('{"probe":true}'), {
+        persistent: false,
+        headers: { 'x-retry-attempt': 1 },
+      });
 
-      await new Promise((resolve) => setTimeout(resolve, 5500));
-      const msg2 = await channel.get(SCRATCH_QUEUE);
-      if (!msg2) throw new Error('expected the message back after its TTL expired');
-      expect(getDeathCount(msg2)).toBe(1);
-      channel.ack(msg2);
-      await channel.deleteQueue('test.scratch.retry-routing.5s').catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 5800));
+      const back = await channel.get(SCRATCH_QUEUE);
+      if (!back) throw new Error('expected the probe back after its 5s TTL');
+      expect(getRetryAttempt(back)).toBe(1);
+      channel.ack(back);
+      await channel.deleteQueue(scratchTtl).catch(() => undefined);
     }, 10000);
   });
+
+  it('a workout whose raw_upload is gone is marked failed immediately, not looped through the retry tiers', async () => {
+    await purgeAllWorkoutQueues();
+    const { workoutId, rawUploadRef } = await seedWorkout('orphan test');
+    await mongoConnection.model('RawUpload').deleteOne({ _id: rawUploadRef });
+
+    publishUploaded(workoutId, rawUploadRef);
+    const status = await waitForStatus(workoutId, 8000);
+    expect(status).toBe('failed');
+
+    // Nothing left cycling — no retry-tier or DLQ messages for it.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    for (const tier of retryTiersFor(WORKOUT_PARSE_QUEUE)) {
+      const stuck = await channel.get(tier.queue);
+      expect(stuck, `unexpected message in ${tier.queue}`).toBe(false);
+      if (stuck) channel.ack(stuck);
+    }
+  }, 12000);
   },
 );
