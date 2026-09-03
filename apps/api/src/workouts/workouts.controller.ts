@@ -1,4 +1,4 @@
-import { Controller, Get, Body, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Body, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, Req, UseGuards, Delete } from '@nestjs/common';
 import { WorkoutSource } from '@workout-logging/shared';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateWorkoutDto } from './dto/create-workout.dto';
@@ -38,5 +38,11 @@ export class WorkoutsController {
   @Get(':id')
   async getById(@Req() req: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.workoutsService.getById(req.userId, id);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteById(@Req() req: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
+    await this.workoutsService.deleteById(req.userId, id);
   }
 }

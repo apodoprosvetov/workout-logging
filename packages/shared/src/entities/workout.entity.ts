@@ -65,6 +65,10 @@ export class Workout {
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt!: Date;
 
+  // Deleting a workout also deletes its workout_exercises and their sets — done
+  // in the ORM (WorkoutsService.deleteById), not the DB (FKs are ON DELETE
+  // NO ACTION). No `cascade` option here: TypeORM's relation cascade does not
+  // propagate repository.remove() to @OneToMany children, only the save path.
   @OneToMany(() => WorkoutExercise, (workoutExercise) => workoutExercise.workout)
   workoutExercises!: WorkoutExercise[];
 }

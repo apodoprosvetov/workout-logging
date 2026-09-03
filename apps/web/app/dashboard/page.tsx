@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiJson, clearTokens } from '../../lib/api-client';
+import { apiFetch, apiJson, clearTokens } from '../../lib/api-client';
 import { useRequireAuth } from '../../lib/use-require-auth';
 import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutListResponse } from '../../lib/workouts';
 import { LogWorkoutForm } from './log-workout-form';
@@ -23,6 +23,18 @@ export default function DashboardPage() {
       setError('Could not load your workouts. Please try again.');
     }
   }, []);
+
+  const handleDelete = useCallback(
+    async (workoutId: string) => {
+      try {
+        await apiFetch(`/workouts/${workoutId}`, { method: 'DELETE' });
+        void load();
+      } catch {
+        setError('Failed to delete workout. Please try again.');
+      }
+    },
+    [load],
+  );
 
   useEffect(() => {
     // React's own documented "Fetching data" useEffect pattern (no data-fetching
@@ -85,6 +97,7 @@ export default function DashboardPage() {
         <ul className="flex flex-col divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
           {workouts.map((workout) => (
             <li key={workout.id}>
+              <div className='flex flex-col'>
               <Link
                 href={`/workouts?id=${workout.id}`}
                 className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-900"
@@ -97,6 +110,14 @@ export default function DashboardPage() {
                   {statusLabel(workout.status)}
                 </span>
               </Link>
+              <button
+                type="button"
+                onClick={() => void handleDelete(workout.id)}
+                className="w-full rounded-b-lg border-t border-zinc-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:border-zinc-800 dark:bg-red-950 dark:text-red-300 dark:hover:bg-red-900"
+              >
+                Delete
+              </button>
+              </div>
             </li>
           ))}
         </ul>

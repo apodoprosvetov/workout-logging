@@ -77,4 +77,33 @@ export class WorkoutsService {
       })),
     };
   }
+
+  // 404, not 403, for another user's workout or a nonexistent one — never
+  // confirm existence of another user's data (contracts/api.md).
+  //
+  // Cascade is done in the ORM, not the DB (the FKs are ON DELETE NO ACTION):
+  // load the graph and remove() children before parent, all in one transaction
+  // so a mid-delete failure rolls back cleanly. A bare workoutRepository.delete
+  // on `workouts` would hit a foreign-key violation from the child
+  // workout_exercises / sets rows — and TypeORM's relation `cascade: ['remove']`
+  // option does NOT propagate a repository.remove() to @OneToMany children
+  // (it only governs the save path), so the removal is spelled out here.
+  // The `exercises` catalog is a ManyToOne reference, not a child — untouched.
+  async deleteById(userId: string, workoutId: string) {
+    const workout = await this.workoutRepository.findOne({
+      where: { id: workoutId, userId },
+      relations: { workoutExercises: { sets: true } },
+    });
+
+    if (!workout) {
+      throw new NotFoundException();
+    }
+
+    await this.workoutRepository.manager.transaction(async (manager) => {
+      const sets = workout.workoutExercises.flatMap((we) => we.sets);
+      if (sets.length > 0) await manager.remove(sets);
+      if (workout.workoutExercises.length > 0) await manager.remove(workout.workoutExercises);
+      await manager.remove(workout);
+    });
+  }
 }

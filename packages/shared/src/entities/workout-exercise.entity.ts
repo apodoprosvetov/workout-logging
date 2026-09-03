@@ -22,6 +22,9 @@ export class WorkoutExercise {
   @Column()
   exerciseId!: string;
 
+  // No cascade here: `exercises` is a shared catalog, not a child of the
+  // workout. Deleting a workout must never delete catalog rows other workouts
+  // still reference.
   @ManyToOne(() => Exercise, (exercise) => exercise.workoutExercises)
   @JoinColumn({ name: 'exercise_id' })
   exercise!: Exercise;
@@ -29,6 +32,8 @@ export class WorkoutExercise {
   @Column()
   exerciseOrder!: number;
 
+  // Sets are deleted with their workout_exercise in WorkoutsService.deleteById
+  // (ORM-side cascade, since the DB FK is ON DELETE NO ACTION).
   @OneToMany(() => WorkoutSet, (set) => set.workoutExercise)
   sets!: WorkoutSet[];
 }
