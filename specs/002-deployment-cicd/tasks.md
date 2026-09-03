@@ -199,6 +199,8 @@ need this phase at all.
 
 **Checkpoint**: All five user stories are independently functional.
 
+**Cost follow-up (2026-09-03)**: US5's CloudWatch Synthetics canary is ~$10/month — by far the priciest single piece of the stack, disproportionate for a personal test project. Gated the canary + its alarm + its artifact S3 bucket (`aws_iam_role.canary`, `aws_iam_role_policy.canary`, `aws_synthetics_canary.health`, `aws_cloudwatch_metric_alarm.health`, `aws_s3_bucket.canary_artifacts` + PAB + lifecycle) behind a new `var.monitoring_enabled` (`variables.tf`, default `false`) via `count = var.monitoring_enabled ? 1 : 0`. All the code stays; `terraform apply` with the default destroys those ~8 resources → the canary cost goes to $0. The `data "archive_file" "canary"` (local zip, no cost) and the whole SNS topic/subscription (`sns.tf`, free) are left in place. Re-enable = `monitoring_enabled = true` + apply (addresses come back as `.health[0]` etc., no import needed). Leftover CloudWatch log group `/aws/lambda/cwsyn-*` isn't Terraform-managed — delete by hand if you want it gone. `terraform validate` clean; the `apply` itself is the user's step (same manual caveat as T012/T034).
+
 ---
 
 ## Phase 8: Polish & Cross-Cutting Concerns

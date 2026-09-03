@@ -50,21 +50,29 @@ resource "aws_s3_bucket_policy" "allow_cloudfront_access" {
 }
 
 # Private S3 bucket for canary artifacts (research.md #8), readable only
-# by the canary's IAM role (monitoring.tf).
+# by the canary's IAM role (monitoring.tf). Gated on var.monitoring_enabled
+# alongside the canary itself — no canary, no artifacts to store.
 resource "aws_s3_bucket" "canary_artifacts" {
+  count = var.monitoring_enabled ? 1 : 0
   # Bucket name includes the account ID since S3 bucket names must be
   # globally unique across all of AWS, not just this account.
   bucket = "workout-logging-canary-artifacts-${data.aws_caller_identity.current.account_id}"
+
+  # Contents are disposable canary run artifacts (screenshots/HAR/logs) with a
+  # 7-day lifecycle — let Terraform empty the bucket on destroy so toggling
+  # monitoring off doesn't fail with BucketNotEmpty.
+  force_destroy = true
 
   tags = {
     Name = "workout-logging-canary-artifacts"
   }
 }
 
-# Public access fully blocked at every level 
+# Public access fully blocked at every level
 # — the only intended reader is the canary's IAM role (monitoring.tf).
 resource "aws_s3_bucket_public_access_block" "canary_artifacts" {
-  bucket = aws_s3_bucket.canary_artifacts.id
+  count  = var.monitoring_enabled ? 1 : 0
+  bucket = aws_s3_bucket.canary_artifacts[0].id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -73,7 +81,8 @@ resource "aws_s3_bucket_public_access_block" "canary_artifacts" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "canary_artifacts" {
-  bucket = aws_s3_bucket.canary_artifacts.id
+  count  = var.monitoring_enabled ? 1 : 0
+  bucket = aws_s3_bucket.canary_artifacts[0].id
 
   rule {
     id     = "expire-canary-artifacts"

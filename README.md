@@ -97,12 +97,18 @@ docker-compose.yml default credentials. `REDIS_URL` is hardcoded to
 
 ## Monitoring & alerting
 
+> **Currently disabled** to keep costs down on this test project. The canary was
+> ~$10/month — the priciest single piece of the stack. All the code below stays
+> in `infra/terraform/`, gated behind `var.monitoring_enabled` (default `false`).
+> Set it to `true` and `terraform apply` to bring it back.
+
 - **CloudWatch Synthetics canary** (`infra/terraform/monitoring.tf`) requests
   `https://<cloudfront-domain>/api/health` every 5 minutes.
 - A **CloudWatch alarm** on canary `SuccessPercent < 100` publishes to the SNS
   topic `workout-logging-alerts` → email. It notifies only on `OK → ALARM`
   (no spam while down, no "recovered" mail).
-- Roughly **$10/month** at the 5-minute rate — the priciest single piece of the stack.
+- The `workout-logging-alerts` SNS topic + email subscription stay provisioned
+  (both free) — only the canary and its alarm/artifact bucket are toggled off.
 
 ## Backups
 

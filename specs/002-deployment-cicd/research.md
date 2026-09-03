@@ -210,6 +210,15 @@ Each item below resolves one open technical question implied by spec.md
   notification depends on per-account GitHub settings. Add (b) back if a
   second maintainer joins or deploys become automation-triggered — see
   the T033 note in tasks.md for the exact step.
+- **Revision (cost, 2026-09-03)**: (a), the canary, is now disabled by
+  default — ~$10/month is disproportionate for a personal test project.
+  The Terraform for it stays, gated behind `var.monitoring_enabled`
+  (default `false`) via `count`. The SNS topic + email subscription stay
+  provisioned (free). Net effect for now: **no automated health alerting
+  at all** — FR-010/013/014 are effectively unmet until `monitoring_enabled`
+  is flipped back to `true`. Accepted for a test project; the one-line
+  toggle + `terraform apply` restores it. See the Phase 7 cost follow-up
+  note in tasks.md.
 - **Rationale**: Stays entirely within AWS, reuses infrastructure
   already being provisioned via Terraform, and a canary hitting the
   CloudFront URL validates the whole path end-to-end, not just "is the

@@ -8,7 +8,8 @@ data "archive_file" "canary" {
 }
 
 resource "aws_iam_role" "canary" {
-  name = "workout-logging-canary-role"
+  count = var.monitoring_enabled ? 1 : 0
+  name  = "workout-logging-canary-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -25,15 +26,16 @@ resource "aws_iam_role" "canary" {
 }
 
 resource "aws_iam_role_policy" "canary" {
-  name = "canary-exec"
-  role = aws_iam_role.canary.id
+  count = var.monitoring_enabled ? 1 : 0
+  name  = "canary-exec"
+  role  = aws_iam_role.canary[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:GetBucketLocation"]
-        Resource = [aws_s3_bucket.canary_artifacts.arn, "${aws_s3_bucket.canary_artifacts.arn}/*"]
+        Resource = [aws_s3_bucket.canary_artifacts[0].arn, "${aws_s3_bucket.canary_artifacts[0].arn}/*"]
       },
       { Effect = "Allow", Action = ["s3:ListAllMyBuckets"], Resource = "*" },
       {
@@ -52,9 +54,10 @@ resource "aws_iam_role_policy" "canary" {
 }
 
 resource "aws_synthetics_canary" "health" {
+  count                = var.monitoring_enabled ? 1 : 0
   name                 = "wl-health-canary"
-  artifact_s3_location = "s3://${aws_s3_bucket.canary_artifacts.id}/"
-  execution_role_arn   = aws_iam_role.canary.arn
+  artifact_s3_location = "s3://${aws_s3_bucket.canary_artifacts[0].id}/"
+  execution_role_arn   = aws_iam_role.canary[0].arn
   runtime_version      = "syn-nodejs-puppeteer-16.0"
   handler              = "health-canary.handler"
   zip_file             = data.archive_file.canary.output_path
@@ -73,11 +76,12 @@ resource "aws_synthetics_canary" "health" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "health" {
+  count       = var.monitoring_enabled ? 1 : 0
   alarm_name  = "wl-health-canary"
   namespace   = "CloudWatchSynthetics"
   metric_name = "SuccessPercent"
   dimensions = {
-    CanaryName = aws_synthetics_canary.health.name
+    CanaryName = aws_synthetics_canary.health[0].name
   }
   statistic           = "Average"
   period              = 300
