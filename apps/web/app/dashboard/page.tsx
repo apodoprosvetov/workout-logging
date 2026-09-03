@@ -7,6 +7,7 @@ import { apiFetch, apiJson, clearTokens } from '../../lib/api-client';
 import { useRequireAuth } from '../../lib/use-require-auth';
 import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutListResponse } from '../../lib/workouts';
 import { LogWorkoutForm } from './log-workout-form';
+import { VolumeChart } from './volume-chart';
 
 export default function DashboardPage() {
   const ready = useRequireAuth();
@@ -66,6 +67,8 @@ export default function DashboardPage() {
       </div>
 
       <LogWorkoutForm onLogged={() => void load()} />
+
+      <VolumeChart />
 
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium text-black dark:text-zinc-50">History</h2>
