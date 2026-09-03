@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Exercise, ExerciseCatalogDocument } from '@workout-logging/shared';
+import { Exercise, ExerciseCatalogDocument, normalizeExerciseName } from '@workout-logging/shared';
 import type { Connection } from 'mongoose';
 import type { EntityManager } from 'typeorm';
 
@@ -18,17 +18,18 @@ export interface MatchResult {
   matched: boolean;
 }
 
-// research.md #7: case-insensitive exact match against exercise_catalog.aliases.
-// No match -> the exercise is still recorded (workout is not blocked), using a
-// slugified fallback — the caller is responsible for flagging needs_review.
+// research.md #7: match the model's exercise name against
+// exercise_catalog.normalized_aliases — an order- and plural-insensitive key
+// (exercise-match.ts), so "Dumbbell Bench press incline" finds "Incline
+// Dumbbell Press". No match -> the exercise is still recorded (workout is not
+// blocked), using a slugified fallback — the caller flags needs_review.
 export async function matchAndUpsertExercise(
   manager: EntityManager,
   mongoConnection: Connection,
   name: string,
 ): Promise<MatchResult> {
   const catalog = mongoConnection.model<ExerciseCatalogDocument>('ExerciseCatalog');
-  const normalized = name.trim().toLowerCase();
-  const entry = await catalog.findOne({ aliases: normalized });
+  const entry = await catalog.findOne({ normalized_aliases: normalizeExerciseName(name) });
 
   const slug = entry ? entry.slug : slugify(name);
   const canonicalName = entry ? entry.name : name;

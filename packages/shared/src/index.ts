@@ -9,3 +9,5 @@ export * from './events/rabbitmq';
 export * from './db/idempotency';
 export * from './db/pg-errors';
 export * from './rate-limit';
+export * from './exercise-match';
+export * from './db/seed-exercise-catalog';

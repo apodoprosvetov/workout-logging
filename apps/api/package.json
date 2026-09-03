@@ -7,7 +7,6 @@
     "build": "nest build",
     "dev": "nest build && concurrently \"nest build --watch\" \"node --watch --watch-path=dist --watch-path=../../packages/shared/dist dist/main.js\"",
     "lint": "eslint .",
-    "seed:exercises": "node dist/db/seed-exercise-catalog.js",
     "start": "node dist/main.js",
     "test": "vitest run"
   },

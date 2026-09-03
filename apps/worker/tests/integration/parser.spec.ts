@@ -7,6 +7,7 @@ import {
   downloadWorkoutImage,
   getWorkoutImagesBucket,
   retryTiersFor,
+  seedExerciseCatalog,
   setupRabbitMqTopology,
   uploadWorkoutImage,
   User,
@@ -54,6 +55,11 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
   let userId: string;
 
   beforeAll(async () => {
+    // The matched-exercise assertions below depend on exercise_catalog being
+    // seeded with the current schema (normalized_aliases) — seed it rather than
+    // assume a hand-run `npm run seed:exercises`.
+    await seedExerciseCatalog();
+
     dataSource = createTypeOrmDataSource();
     await dataSource.initialize();
     mongoConnection = await createMongooseConnection();

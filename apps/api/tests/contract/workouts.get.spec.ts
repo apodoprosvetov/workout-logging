@@ -47,9 +47,9 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
     // by accident in local dev (a prior real parser run had upserted it via
     // matchAndUpsertExercise), never true on a fresh database (e.g. CI).
     // Postgres `exercises` rows aren't seeded like Mongo's exercise_catalog
-    // (apps/api/src/db/seed-exercise-catalog.ts) — they're normally created
-    // lazily by the worker, so the test creates its own fixture instead of
-    // relying on incidental prior state.
+    // (packages/shared/src/db/seed-exercise-catalog.ts) — they're normally
+    // created lazily by the worker, so the test creates its own fixture
+    // instead of relying on incidental prior state.
     const exerciseRepository = ds.getRepository(Exercise);
     const exercise =
       (await exerciseRepository.findOneBy({ slug: 'bench-press' })) ??

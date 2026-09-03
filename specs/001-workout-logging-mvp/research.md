@@ -203,6 +203,36 @@ Phase 1 design can proceed without unknowns.
 - **Alternatives considered**: Let Claude assign muscle groups directly
   (rejected — no single source of truth, harder to fix a bad mapping
   for one exercise across all historical workouts).
+- **Matching upgrade (2026-09-03)**: exact alias match was too brittle
+  in practice — a real workout ("Upper Body A", `b661fe2e`) had 4 of 6
+  exercises miss because of word order ("Dumbbell Bench press incline"
+  vs the catalog's "Incline Dumbbell Press") and plurals ("Pull-ups" vs
+  "pull-up"). Match key is now `exercise_catalog.normalized_aliases`: the
+  name and every alias run through `normalizeExerciseName`
+  (`packages/shared/src/exercise-match.ts`) — lowercase, split on
+  non-alphanumerics, singularize each token, de-duplicate, sort. So
+  aliases only need one phrasing per equipment variant, not every word
+  order. Abbreviation synonyms (`db`/`dumbbell`, `bb`/`barbell`) are
+  still separate aliases. The `aliases: 1` Mongo index is replaced by
+  `normalized_aliases: 1`.
+- **Muscle-group vocabulary**: `chest, triceps, shoulders, back, biceps,
+  forearms, quads, glutes, hamstrings, calves, core`. `forearms` and
+  `calves` were added with the 2026-09-03 catalog expansion (~20 → 70
+  entries). Wrist/reverse curls are `forearms` (not `biceps` — a common
+  mis-tag that would inflate biceps volume). Adding a group = add it here
+  and to a catalog entry, nothing else (the analytics worker attributes
+  volume to whatever list an entry carries).
+- **Catalog is shared reference data**: seed moved from
+  `apps/api/src/db/` to `packages/shared/src/db/seed-exercise-catalog.ts`
+  (`npm run seed:exercises --workspace=@workout-logging/shared`),
+  since both `apps/api` (seeding) and `apps/worker` (matching, and the
+  parser integration test) need it. Upserts by slug; the 20 pre-expansion
+  entries keep their original slug so already-parsed workouts don't
+  orphan. Re-running is safe and recomputes `normalized_aliases`.
+- **Known**: re-seeding does **not** fix already-parsed workouts — their
+  `workout_exercises` point at the old slugified fallback rows
+  (`dumbbell-rows`, `dips`, ...). Re-submit the workout or write a
+  slug-remap migration.
 
 ## 8. Unified ingestion endpoint (revises design-notes.md R7/R8/R10)
 

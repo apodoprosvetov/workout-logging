@@ -155,13 +155,20 @@ past that point.
   slug,
   name,
   aliases: [string],
-  muscle_groups: [string],
-  equipment
+  normalized_aliases: [string],   // name + aliases, token-sorted & singularized
+  muscle_groups: [string],        // from the vocab below
+  equipment                       // barbell | dumbbell | cable | machine | bodyweight | null
 }
 ```
 
-Seeded/maintained independently of user data; not deleted on account
-deletion.
+The parser matches on `normalized_aliases` (research.md #7,
+`packages/shared/src/exercise-match.ts`), so word order and plurals
+don't matter. `muscle_groups` vocabulary: `chest, triceps, shoulders,
+back, biceps, forearms, quads, glutes, hamstrings, calves, core`.
+
+Seeded/maintained independently of user data
+(`packages/shared/src/db/seed-exercise-catalog.ts`, upsert by slug); not
+deleted on account deletion.
 
 ## Redis (ephemeral / derived)
 
