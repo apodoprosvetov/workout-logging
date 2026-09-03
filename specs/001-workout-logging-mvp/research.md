@@ -217,7 +217,7 @@ Phase 1 design can proceed without unknowns.
   `normalized_aliases: 1`.
 - **Muscle-group vocabulary**: `chest, triceps, shoulders, back, biceps,
   forearms, quads, glutes, hamstrings, calves, core`. `forearms` and
-  `calves` were added with the 2026-09-03 catalog expansion (~20 → 70
+  `calves` were added with the 2026-09-03 catalog expansion (~20 → 72
   entries). Wrist/reverse curls are `forearms` (not `biceps` — a common
   mis-tag that would inflate biceps volume). Adding a group = add it here
   and to a catalog entry, nothing else (the analytics worker attributes

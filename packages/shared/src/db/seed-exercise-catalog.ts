@@ -81,6 +81,7 @@ const EXERCISES: SeedExercise[] = [
   { slug: 'hack-squat', name: 'Hack Squat', aliases: ['hack squats', 'machine hack squat', 'hack squat machine'], muscle_groups: ['quads', 'glutes'], equipment: 'machine' },
   { slug: 'bulgarian-split-squat', name: 'Bulgarian Split Squat', aliases: ['split squat', 'bulgarian split squats', 'db split squat', 'rear elevated split squat', 'bss'], muscle_groups: ['quads', 'glutes', 'hamstrings'], equipment: 'dumbbell' },
   { slug: 'dumbbell-lunge', name: 'Dumbbell Lunge', aliases: ['lunge', 'lunges', 'db lunge', 'walking lunges', 'dumbbell lunges', 'db lunges', 'lunging'], muscle_groups: ['quads', 'glutes', 'hamstrings'], equipment: 'dumbbell' },
+  { slug: 'barbell-forward-lunge', name: 'Barbell Forward Lunge', aliases: ['barbell lunge', 'barbell lunges', 'forward lunge', 'forward lunges', 'bb lunge', 'bb forward lunge', 'barbell walking lunge', 'barbell reverse lunge'], muscle_groups: ['quads', 'glutes', 'hamstrings'], equipment: 'barbell' },
   { slug: 'leg-press', name: 'Leg Press', aliases: ['leg presses', 'machine leg press', 'seated leg press'], muscle_groups: ['quads', 'glutes', 'hamstrings'], equipment: 'machine' },
   { slug: 'leg-extension', name: 'Leg Extension', aliases: ['leg extensions', 'machine leg extension', 'quad extensions'], muscle_groups: ['quads'], equipment: 'machine' },
 
@@ -101,6 +102,7 @@ const EXERCISES: SeedExercise[] = [
 
   // ---- Core ----
   { slug: 'plank', name: 'Plank', aliases: ['planks', 'front plank', 'forearm plank', 'bodyweight plank'], muscle_groups: ['core'], equipment: 'bodyweight' },
+  { slug: 'crunch', name: 'Crunch', aliases: ['crunches', 'ab crunch', 'floor crunch', 'bodyweight crunch', 'basic crunch'], muscle_groups: ['core'], equipment: 'bodyweight' },
   { slug: 'side-plank', name: 'Side Plank', aliases: ['side planks', 'bodyweight side plank', 'lateral plank'], muscle_groups: ['core'], equipment: 'bodyweight' },
   { slug: 'hanging-leg-raise', name: 'Hanging Leg Raise', aliases: ['leg raise', 'hanging leg raises', 'hanging knee raise', 'captains chair leg raise'], muscle_groups: ['core'], equipment: 'bodyweight' },
   { slug: 'decline-sit-up', name: 'Decline Sit-Up', aliases: ['decline sit up', 'decline sit ups', 'decline crunch', 'weighted decline sit up'], muscle_groups: ['core'], equipment: 'bodyweight' },

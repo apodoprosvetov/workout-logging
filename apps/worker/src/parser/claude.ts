@@ -136,6 +136,9 @@ export async function extractWorkout({
       text:
         'Extract the exercises, sets, reps, and weight from this workout log using the record_workout tool. ' +
         'The log may be free text, one or more photos/screenshots, or both — read all of them as one workout. ' +
+        'Record EVERY set exactly as written: one entry per line/row/numbered set, in order. Never merge, ' +
+        'skip, deduplicate, or summarise sets — if an exercise lists 3 sets, output 3 sets, even when the ' +
+        'weight repeats. ' +
         'Default to kg if no unit is given. For bodyweight-only sets with no weight mentioned, use weight 0 — ' +
         'do not skip the set or make up a weight. Also extract the workout name/label and date if they literally ' +
         `appear (do not guess or invent them).${logText ? `\n\n${logText}` : ''}`,
