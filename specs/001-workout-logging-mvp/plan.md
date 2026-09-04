@@ -8,16 +8,22 @@ architecture decisions carried over from [design-notes.md](./design-notes.md)
 ## Summary
 
 Let a person log a workout as free text and/or a photo, in a single
-submission — a Telegram photo message with a caption is both at once
-(research.md #8) — from the web app or Telegram, and have it parsed by
-Claude into structured exercises/sets so
-weekly volume per muscle group is visible on a dashboard. Ingestion is
-synchronous-and-fast (ack < 2s); parsing and analytics update happen
-asynchronously via RabbitMQ. Built as a Node.js/TypeScript monorepo: a
-Next.js web app, a NestJS (Fastify-adapter) API service (also hosting
-the Telegram webhook), and a worker process consuming RabbitMQ events —
-sharing Postgres (normalized data), MongoDB (raw uploads + exercise
-catalog), and Redis (rate limiting + cached weekly aggregates).
+submission (both at once is allowed — a caption plus an image,
+research.md #8) via the web app, and have it parsed by Claude into
+structured exercises/sets so weekly volume per muscle group is visible on
+a dashboard. Ingestion is synchronous-and-fast (ack < 2s); parsing and
+analytics update happen asynchronously via RabbitMQ. Built as a
+Node.js/TypeScript monorepo: a Next.js web app, a NestJS (Fastify-adapter)
+API service, and a worker process consuming RabbitMQ events — sharing
+Postgres (normalized data), MongoDB (raw uploads + exercise catalog), and
+Redis (rate limiting + cached weekly aggregates).
+
+> **Telegram descoped (2026-09-04):** the original plan included a
+> Telegram bot as a second logging channel (User Story 2). It was not
+> built — a conversational MCP server is a better fit for where the
+> product is heading (its own future spec). References to the Telegram
+> webhook / `node-telegram-bot-api` / `apps/api/src/telegram/` below are
+> historical; that module was never created.
 
 ## Technical Context
 
@@ -26,8 +32,7 @@ catalog), and Redis (rate limiting + cached weekly aggregates).
 **Primary Dependencies**: NestJS (`@nestjs/core`, `@nestjs/common`)
 on the Fastify HTTP adapter (`@nestjs/platform-fastify`) for `apps/api`
 (research.md #1); Next.js 14+ (web dashboard) with Tailwind CSS v4
-(`@tailwindcss/postcss`) for styling; `node-telegram-bot-api`
-or raw Telegram Bot API via webhook; `amqplib` (RabbitMQ); TypeORM
+(`@tailwindcss/postcss`) for styling; `amqplib` (RabbitMQ); TypeORM
 (Postgres entities) and Mongoose (MongoDB schemas) — defined once in
 `packages/shared` and consumed by both `apps/api` (via `@nestjs/typeorm`
 / `@nestjs/mongoose`) and `apps/worker` (via a standalone `DataSource` /
@@ -117,12 +122,11 @@ apps/
 │   │   └── workouts/[id]/
 │   └── tests/
 │
-├── api/                       # NestJS (Fastify adapter) HTTP API + Telegram webhook
+├── api/                       # NestJS (Fastify adapter) HTTP API
 │   ├── src/
 │   │   ├── main.ts             # Nest bootstrap (FastifyAdapter)
 │   │   ├── app.module.ts
 │   │   ├── auth/                # AuthModule: controller, service, DTOs, guard, entities
-│   │   ├── telegram/            # TelegramModule: controller, bot-sender service
 │   │   ├── workouts/            # WorkoutsModule: controller, ingestion service, entities
 │   │   ├── analytics/           # AnalyticsModule: controller
 │   │   └── events/              # RabbitMQ publisher (Nest provider)

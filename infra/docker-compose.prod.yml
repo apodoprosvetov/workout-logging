@@ -107,7 +107,7 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL}
       JWT_SECRET: ${JWT_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      # TELEGRAM_BOT_TOKEN removed 2026-09-04 — Telegram bot descoped (spec 001 US2)
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,7 +145,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    # No JWT_SECRET/PORT/TELEGRAM_BOT_TOKEN — worker has no HTTP surface
+    # No JWT_SECRET/PORT — worker has no HTTP surface
     # and never issues/verifies tokens (only apps/api does).
     # Single replica: no HTTP surface to load-balance, and spec 001's
     # existing consumer idempotency/retry design already tolerates a brief

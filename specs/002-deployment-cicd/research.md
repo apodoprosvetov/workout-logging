@@ -82,9 +82,12 @@ Each item below resolves one open technical question implied by spec.md
 - **Rationale**: Fewer moving parts (no ACM, no Route53, no DNS-01
   challenge flow, no `us-east-1` provider alias) for a personal-scale
   project where a `*.cloudfront.net` URL is a perfectly acceptable
-  public address. Telegram's Bot API webhook requirement is just "valid
+  public address. A typical external webhook requirement is just "valid
   HTTPS on a standard port with a trusted cert" — a `.cloudfront.net`
-  URL satisfies that with no restriction on which domain it is.
+  URL satisfies that with no restriction on which domain it is. (This
+  was originally framed around Telegram's Bot API; the Telegram bot was
+  descoped 2026-09-04, but the reasoning carries over to any future
+  webhook / MCP consumer.)
 - **Upgrade path, not a redesign**: adding a custom domain later is
   purely additive — register/point a domain, request an ACM cert (in
   `us-east-1`) for it, add it as a CloudFront Alternate Domain Name.
@@ -106,10 +109,11 @@ Each item below resolves one open technical question implied by spec.md
   origins, reachable at its one default `*.cloudfront.net` domain
   (research.md #3) — path-based cache behaviors route `/` (and
   other static asset paths) to the S3 bucket (research.md #1), and API
-  paths (`/auth/*`, `/workouts/*`, `/telegram/*`, etc.) to the EC2/Caddy
-  origin, with caching disabled for those paths (dynamic, per-user
-  responses) and all HTTP methods (including POST, needed for the
-  Telegram webhook and every write endpoint) allowed through. The EC2
+  paths (`/auth/*`, `/workouts/*`, `/analytics/*`, etc. — all under the
+  `/api/*` prefix) to the EC2/Caddy origin, with caching disabled for
+  those paths (dynamic, per-user responses) and all HTTP methods
+  (including POST, needed by every write endpoint — and by any future
+  external webhook) allowed through. The EC2
   instance's security group only accepts inbound traffic from
   CloudFront's published IP ranges — never directly from the public
   internet.
@@ -262,8 +266,9 @@ Each item below resolves one open technical question implied by spec.md
 - **Decision**: Two distinct secret stores for two distinct lifecycles.
   CI-time secrets (AWS credentials/OIDC role, ECR/SSM/Terraform access)
   live in GitHub Actions encrypted repository secrets. Application
-  runtime secrets (`JWT_SECRET`, `ANTHROPIC_API_KEY`,
-  `TELEGRAM_BOT_TOKEN`, database passwords) live in AWS Systems Manager
+  runtime secrets (`JWT_SECRET`, `ANTHROPIC_API_KEY`, database passwords;
+  `TELEGRAM_BOT_TOKEN` was in this list until the bot was descoped
+  2026-09-04) live in AWS Systems Manager
   Parameter Store as `SecureString` values; the deploy step (via SSM,
   research.md #2) resolves them into the instance's runtime environment
   at deploy time, never writing them into a git-tracked file.

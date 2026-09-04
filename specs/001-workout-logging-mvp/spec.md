@@ -54,7 +54,15 @@ Delivers value on its own even before Telegram or photo logging exist.
 
 ---
 
-### User Story 2 - Log a workout from Telegram at the gym (Priority: P2)
+### User Story 2 - Log a workout from Telegram at the gym (Priority: P2) — DESCOPED (2026-09-04)
+
+> **Not built for the MVP.** The mid-workout input channel is being
+> reconsidered — a conversational MCP server (its own future spec) is a
+> better fit for where this product is heading (editing, incremental
+> logging, analysis, templates) than a one-shot bot. FR-003–006 and SC-004
+> below are deferred with this story. The `telegram_link_codes` table and
+> `users.telegram_chat_id` column already exist (InitialSchema migration)
+> and are left in place, unused. US1/US3/US4 do not depend on this story.
 
 A person links their Telegram account to their profile using a one-time
 code, then logs workouts by simply messaging the bot from the gym floor,
@@ -94,13 +102,13 @@ but text logging (User Story 1) already delivers the core value, so this
 is an enhancement rather than a blocker.
 
 **Independent Test**: Can be fully tested by uploading a photo of a
-workout (web or Telegram) and confirming the resulting structured workout
+workout via the web app and confirming the resulting structured workout
 matches what's shown in the photo.
 
 **Acceptance Scenarios**:
 
 1. **Given** a registered user, **When** they upload a photo/screenshot of
-   a workout (web or Telegram), **Then** the system extracts exercises,
+   a workout via the web app, **Then** the system extracts exercises,
    sets, reps, and weight from the image and a structured workout appears
    in their history.
 
@@ -161,23 +169,16 @@ history list and a correct weekly-volume-per-muscle-group chart.
 - **FR-002**: System MUST authenticate a registered user and keep them
   signed in across a session without requiring credentials on every
   action.
-- **FR-003**: System MUST let a signed-in user generate a one-time code
-  for linking a Telegram account, valid for 10 minutes.
-- **FR-004**: System MUST bind a Telegram chat to a user's account when a
-  valid, unexpired linking code is presented, and MUST invalidate the
-  code immediately afterward so it cannot be reused.
-- **FR-005**: System MUST limit linking-code attempts to 5 per hour per
-  account.
-- **FR-006**: System MUST reply to any message from an unlinked Telegram
-  chat with instructions for linking an account via the web app.
-- **FR-007**: Users MUST be able to log a workout by submitting free text,
-  from either the web app or Telegram.
+- **FR-003 · FR-004 · FR-005 · FR-006**: _(Telegram account linking, chat
+  binding, linking-code rate limit, unlinked-chat reply.)_ **Deferred —
+  Telegram descoped from the MVP (see User Story 2, 2026-09-04).**
+- **FR-007**: Users MUST be able to log a workout by submitting free text
+  via the web app.
 - **FR-008**: Users MUST be able to log a workout by submitting one or
-  more photos/screenshots (up to 10 per submission), from either the
-  web app or Telegram — e.g. a multi-page paper log or a Telegram
-  album. No format or size limits are enforced per image in the MVP;
-  unparseable uploads fall back to the `needs_review` behavior in
-  FR-013.
+  more photos/screenshots (up to 10 per submission) via the web app —
+  e.g. a multi-page paper log. No format or size limits are enforced
+  per image in the MVP; unparseable uploads fall back to the
+  `needs_review` behavior in FR-013.
 - **FR-009**: System MUST acknowledge a submitted workout back to the
   user in under 2 seconds, independent of how long full interpretation
   takes.
@@ -213,17 +214,17 @@ history list and a correct weekly-volume-per-muscle-group chart.
   workout (exercises/sets) and the AI's raw response — is retained
   indefinitely by default (revised 2026-08-21, research.md #11).
 - **FR-021**: Users MUST be able to delete their account, which MUST
-  delete all associated data (workouts, uploads, Telegram link).
+  delete all associated data (workouts, uploads, and any Telegram
+  linking record if one is ever created).
 
 ### Key Entities *(include if feature involves data)*
 
-- **User**: An account holder, identified by email, optionally linked to
-  one Telegram chat.
-- **Linking Code**: A short-lived, single-use code that binds a Telegram
-  chat to a user's account.
+- **User**: An account holder, identified by email.
+- **Linking Code**: _(Binds a Telegram chat to an account.)_ **Deferred
+  with User Story 2** — the table exists but is unused.
 - **Workout**: A single logged training session for a user — has a
-  status (pending / parsed / needs review / failed), a source (web or
-  Telegram), and when it was performed.
+  status (pending / parsed / needs review / failed), a source (currently
+  always `web`), and when it was performed.
 - **Exercise Entry**: One exercise performed within a workout, in order,
   linked to a canonical exercise.
 - **Set**: One set within an exercise entry — weight, reps, and unit, in
@@ -237,16 +238,15 @@ history list and a correct weekly-volume-per-muscle-group chart.
 
 - **SC-001**: A new user can register and successfully log their first
   text workout in under 2 minutes.
-- **SC-002**: Submitting a workout (text or photo), from either the web
-  app or Telegram, is acknowledged to the user in under 2 seconds.
+- **SC-002**: Submitting a workout (text or photo) via the web app is
+  acknowledged to the user in under 2 seconds.
 - **SC-003**: At least 90% of clearly-formatted text workout submissions
   are parsed into fully correct structured data (right exercises, sets,
   reps, and weight) without manual correction.
-- **SC-004**: A user with an already-linked Telegram account can log a
-  full multi-exercise workout, from opening the chat to receiving
-  confirmation, in under 30 seconds.
+- **SC-004**: _(Telegram mid-workout logging speed.)_ **Deferred with
+  User Story 2.**
 - **SC-005**: No user is ever able to view or modify another user's
-  workout data, across every access path (web and Telegram).
+  workout data, across every access path.
 - **SC-006**: Retried or redelivered submissions never produce duplicate
   entries in a user's workout history.
 - **SC-007**: A logged and successfully parsed workout is reflected in
@@ -258,8 +258,6 @@ history list and a correct weekly-volume-per-muscle-group chart.
 - The MVP is used by a single real person in practice, but every entity
   is scoped by user so a second real user can be added later without
   schema or requirement changes.
-- Users already have a Telegram account when they choose to link one;
-  account creation on Telegram itself is out of scope.
 - Photo submissions are static images (not video or multi-page
   documents).
 - Default weight unit is kilograms; users may log sets in pounds.

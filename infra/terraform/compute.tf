@@ -57,7 +57,7 @@ resource "aws_security_group" "app" {
 
   # aws_security_group has no default egress rule — without this, the
   # instance couldn't reach ECR, SSM endpoints, or any external API
-  # (DeepSeek, Telegram) at all.
+  # (e.g. DeepSeek) at all.
   egress {
     description = "Allow all outbound"
     from_port   = 0

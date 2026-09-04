@@ -11,7 +11,8 @@ request/response shapes.
 - `apps/api` and `apps/worker` running against that stack.
 - `apps/web` running, pointed at `apps/api`.
 - Environment variables set (never committed, FR-019): DB connection
-  strings, `JWT_SECRET`, `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`.
+  strings, `JWT_SECRET`, `ANTHROPIC_API_KEY` (`TELEGRAM_BOT_TOKEN` is
+  descoped — see Story 2).
 - Postgres migrated (data-model.md schema applied) and MongoDB
   `exercise_catalog` seeded with at least a few common exercises
   (e.g. "bench press", "overhead press") and their muscle groups.
@@ -38,28 +39,19 @@ each with its own sets matching the input exactly (SC-003). If it
 instead shows `needs_review`, check `apps/worker` logs and the
 `ai_response_raw` field in MongoDB `raw_uploads` for why.
 
-## Story 2 — Telegram linking + logging (P2)
+## Story 2 — Telegram (P2) — DESCOPED (2026-09-04)
 
-```bash
-curl -sX POST localhost:3000/telegram/link-code -H "authorization: Bearer $ACCESS_TOKEN"
-# → { code, expires_at }
-```
-
-In Telegram, message the bot `/start <code>`. **Expected**: bot
-confirms linking. Send a workout as a plain message. **Expected**:
-`GET /workouts` (web) shows it shortly after, same as Story 1.
-
-Send any message from a *different*, unlinked chat. **Expected**: bot
-replies with linking instructions (FR-006), no workout is created.
+Not built. Telegram is deferred to a future spec (a conversational MCP
+server). See spec.md User Story 2.
 
 ## Story 3 — Photo logging (P3)
 
-Send/upload a screenshot of a workout (web `POST /workouts` with the
-`image` field, or a Telegram photo message). **Expected**: same
-`pending → parsed` flow as Story 1, sourced from image content instead
-of text. Also try a Telegram photo *with a caption* — **Expected**:
-both the caption text and the image are used in the same parse
-(research.md #8), not just one or the other.
+Upload a screenshot of a workout via the web app (`POST /workouts` with
+one or more `images` fields). **Expected**: same `pending → parsed`
+flow as Story 1, sourced from image content instead of text. Also try a
+photo *with a text note in the same submission* — **Expected**: both
+the note and the image are used in the same parse (research.md #8), not
+just one or the other.
 
 ## Story 4 — Weekly dashboard (P4)
 

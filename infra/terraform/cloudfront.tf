@@ -131,7 +131,7 @@ resource "aws_cloudfront_function" "ext_rewrites" {
 # The one public address for the whole app — apps/web and apps/api both live
 # behind this same *.cloudfront.net domain (research.md #3, no custom
 # domain). Used by quickstart.md to test the deployment, by T015 (GitHub
-# Actions secrets, e.g. for a future Telegram webhook URL), and by anyone
+# Actions secrets, e.g. for a future external webhook / MCP URL), and by anyone
 # just wanting the live URL without digging through the AWS console.
 output "cloudfront_domain_name" {
   value       = aws_cloudfront_distribution.web_distribution.domain_name

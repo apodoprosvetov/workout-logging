@@ -152,6 +152,12 @@ Phase 1 design can proceed without unknowns.
 
 ## 5. Telegram bot delivery mode
 
+> **DESCOPED (2026-09-04).** The Telegram bot was never built (spec.md
+> User Story 2). The mid-workout input channel is being reconsidered — a
+> conversational MCP server (its own future spec) is a better fit than a
+> one-shot webhook bot. The decision below is retained as the record of
+> what was planned; `POST /telegram/webhook` does not exist.
+
 - **Decision**: Webhook (not long-polling), hosted as a route inside
   `apps/api` (`POST /telegram/webhook`).
 - **Rationale**: Avoids a fourth always-on process; `apps/api` is

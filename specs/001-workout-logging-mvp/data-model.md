@@ -13,7 +13,7 @@ adjusted for decisions made in [spec.md](./spec.md) (Clarifications) and
 | `id` | uuid, PK | |
 | `email` | text, unique | |
 | `password_hash` | text | argon2 (research.md #6) |
-| `telegram_chat_id` | bigint, nullable, unique | set by linking flow |
+| `telegram_chat_id` | bigint, nullable, unique | column exists; the linking flow that would set it is **descoped** (spec.md US2, 2026-09-04) — always null |
 | `created_at` | timestamptz | |
 | `deleted_at` | timestamptz, nullable | soft-delete marker; see Account Deletion below |
 
@@ -27,7 +27,10 @@ adjusted for decisions made in [spec.md](./spec.md) (Clarifications) and
 | `expires_at` | timestamptz | issued_at + 30 days |
 | `revoked_at` | timestamptz, nullable | set on rotation/logout |
 
-### `telegram_link_codes`
+### `telegram_link_codes` — DESCOPED (spec.md US2, 2026-09-04)
+
+Table exists (InitialSchema migration) but is never written to — Telegram
+was descoped from the MVP. Left in place; a future migration can drop it.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -48,7 +51,7 @@ section.
 | `id` | uuid, PK | |
 | `user_id` | uuid, FK → users.id | every query scoped by this (FR-015) |
 | `name` | text, nullable | e.g. "Push day"; extracted by the parser worker only if literally present in the raw text/image (research.md #10) — never invented from the exercise list, so AI-*inferred* naming stays deferred beyond MVP per spec.md Assumptions |
-| `source` | enum: `web` \| `telegram` | |
+| `source` | enum: `web` \| `telegram` | always `web` — `telegram` unused (US2 descoped) |
 | `has_text` | boolean | mirrors `raw_uploads.text` presence (research.md #8) |
 | `has_image` | boolean | mirrors `raw_uploads.image_ref` presence (research.md #8) |
 | `raw_input_ref` | text | points to `raw_uploads._id` in MongoDB |
@@ -136,9 +139,8 @@ workout in any status.
 ```
 
 At least one of `text` / `image_refs` MUST be present (research.md #8,
-#11); both may be present at once (e.g. a Telegram photo with a
-caption), and up to `MAX_WORKOUT_IMAGES` (10) images may be present
-(research.md #11 — a multi-page paper log or a Telegram album).
+#11); both may be present at once (e.g. a photo with a text note), and up to `MAX_WORKOUT_IMAGES` (10) images may be present
+(research.md #11 — e.g. a multi-page paper log).
 
 `text` and `ai_response_raw` are retained indefinitely by default
 (FR-020); deleted on account deletion (FR-021, see below). The actual

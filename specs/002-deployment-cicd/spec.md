@@ -10,6 +10,16 @@
 
 ## Clarifications
 
+### Session 2026-09-04
+
+- Note: The Telegram bot (spec 001, User Story 2 / T038–T041) that
+  originally motivated User Story 3 and FR-006 was **descoped** on
+  2026-09-04. User Story 3 stays in scope unchanged — a stable public
+  HTTPS endpoint that accepts direct (non-browser) inbound requests is
+  still wanted for a future conversational MCP server / webhook consumer,
+  which has the same shape. "Telegram" below reads as "an external
+  service"; it was already delivered and verified (T029).
+
 ### Session 2026-08-25
 
 - Q: Where should the application be deployed? → A: AWS, on a single EC2
@@ -89,19 +99,25 @@ that change within a bounded time window.
 ### User Story 3 - Public endpoint reachable by an external service (Priority: P3)
 
 As the maintainer, the deployed application exposes a stable public HTTPS
-endpoint that a third-party service (Telegram) can call directly, not just
-a URL that a human can browse to.
+endpoint that a third-party service can call directly, not just a URL that
+a human can browse to.
 
-**Why this priority**: Enables Telegram bot functionality (a separate,
-already-specified feature) to work at all once built — without this, that
-feature is permanently blocked regardless of how well it's implemented.
-Lower priority than Stories 1–2 because it's a specific consequence of
-"the app is live," not a separate deployment mechanism.
+> Originally motivated by the planned Telegram bot (spec 001, US2),
+> **descoped 2026-09-04**. The capability is still wanted — a future
+> conversational MCP server / webhook consumer needs the exact same
+> thing. This story was already delivered and verified (T029).
+
+**Why this priority**: Enables any external-service integration (the
+planned Telegram bot, later a conversational MCP server) to work at all
+once built — without this, such a feature is permanently blocked
+regardless of how well it's implemented. Lower priority than Stories 1–2
+because it's a specific consequence of "the app is live," not a separate
+deployment mechanism.
 
 **Independent Test**: From outside the deployment environment, send a
 direct HTTP request (not through a browser) to the application's
 webhook-style endpoint and confirm it responds successfully, the same way
-an external service like Telegram would reach it.
+an external service would reach it.
 
 **Acceptance Scenarios**:
 
@@ -210,8 +226,9 @@ notification arrives without any manual polling or log-checking.
   internet over a secure (HTTPS), trusted connection.
 - **FR-006**: The deployed application MUST expose at least one public
   endpoint capable of receiving direct inbound requests from a third-party
-  service (not only browser-driven traffic), to support the existing
-  Telegram integration requirements.
+  service (not only browser-driven traffic), to support external-service
+  integrations (originally the planned Telegram bot, descoped 2026-09-04;
+  a future conversational MCP server has the same need).
 - **FR-007**: The system MUST allow the maintainer to revert production to
   the previous working version without writing or merging new code.
 - **FR-008**: The system MUST NOT expose secrets (credentials, API keys,

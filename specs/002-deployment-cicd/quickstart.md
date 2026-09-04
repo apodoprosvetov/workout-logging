@@ -67,8 +67,9 @@ curl -sX POST https://<cloudfront-domain>/auth/register \
 ```
 
 **Expected**: a direct HTTPS POST (not a browser) succeeds — proves the
-endpoint accepts real inbound requests the same way Telegram's webhook
-calls would, once `POST /telegram/webhook` exists (spec 001, T038–T041).
+endpoint accepts real inbound requests the same way an external webhook
+consumer would (originally the planned Telegram bot, descoped 2026-09-04;
+a future conversational MCP server has the same requirement).
 `curl -v` the same URL and confirm the certificate presented is
 CloudFront's own default certificate for its `*.cloudfront.net` domain
 (a trusted CA, not self-signed — SC-006, research.md #3); the

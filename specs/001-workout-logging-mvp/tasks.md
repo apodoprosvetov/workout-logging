@@ -89,38 +89,37 @@ description: "Task list for Workout Logging MVP"
 
 ---
 
-## Phase 4: User Story 2 - Log a workout from Telegram at the gym (Priority: P2)
+## Phase 4: User Story 2 - Log a workout from Telegram at the gym (Priority: P2) — ~~DESCOPED 2026-09-04~~
 
-**Goal**: A person links Telegram via a one-time code and logs workouts by messaging the bot.
+**Not built.** The mid-workout input channel is deferred to a future spec (a
+conversational MCP server — better suited to the editing / incremental-logging /
+analysis / templates direction than a one-shot bot). See spec.md User Story 2 for
+the rationale. T038–T041 (and T045 in Phase 5) are cancelled; the
+`telegram_link_codes` table + `users.telegram_chat_id` column stay in place,
+unused. US1/US3/US4 never depended on this phase.
 
-**Independent Test**: Generate a linking code, send `/start <code>` to the bot, send a text workout, confirm it appears in the web dashboard (quickstart.md Story 2).
-
-### Implementation for User Story 2
-
-- [ ] T038 [P] [US2] Implement POST /telegram/link-code route (rate-limited via T019, 5/hour per FR-005) in apps/api/src/telegram/telegram.controller.ts per contracts/api.md
-- [ ] T039 [US2] Implement POST /telegram/webhook route: `/start <code>` linking (binds chat_id, invalidates code per FR-004), unlinked-chat reply (FR-006), routes linked-chat text messages into the ingestion service (T029) in apps/api/src/telegram/telegram.controller.ts
-- [ ] T040 [P] [US2] Implement Telegram send-message helper as a Nest provider in apps/api/src/telegram/telegram-bot.service.ts
-- [ ] T041 [P] [US2] Implement apps/web "generate Telegram linking code" UI in apps/web/app/dashboard/settings/page.tsx
-
-**Checkpoint**: User Stories 1 AND 2 both work independently (quickstart.md Story 2)
+- ~~T038 [P] [US2] POST /telegram/link-code route~~ — cancelled
+- ~~T039 [US2] POST /telegram/webhook route~~ — cancelled
+- ~~T040 [P] [US2] Telegram send-message helper~~ — cancelled
+- ~~T041 [P] [US2] apps/web "generate Telegram linking code" UI~~ — cancelled
 
 ---
 
 ## Phase 5: User Story 3 - Log a workout from a photo or screenshot (Priority: P3)
 
-**Goal**: A person uploads a photo/screenshot (web or Telegram, optionally with an accompanying text note/caption in the same submission) and it's parsed using both, via the same `POST /workouts` endpoint as Story 1 (research.md #8).
+**Goal**: A person uploads a photo/screenshot via the web app (optionally with an accompanying text note in the same submission) and it's parsed using both, via the same `POST /workouts` endpoint as Story 1 (research.md #8).
 
-**Independent Test**: Upload a photo via web or Telegram, confirm the resulting structured workout matches the photo; also send a Telegram photo with a caption, confirm both the caption and the photo are reflected in the parsed workout (quickstart.md Story 3).
+**Independent Test**: Upload a photo via the web app, confirm the resulting structured workout matches the photo; also submit a photo with a text note, confirm both are reflected in the parsed workout (quickstart.md Story 3).
 
 ### Implementation for User Story 3
 
 - [X] T042 [US3] Extend ingestion service's image handling: accept the multipart `images` files from T030 (via `@fastify/multipart`), store each in `raw_uploads.image_refs` alongside any `text` already captured (no size/format validation per spec.md Clarifications Q4) in apps/api/src/workouts/ingestion.service.ts — **implemented ahead of sequence** while resolving the multi-image redesign (research.md #11), together with T030's revision, since the original single-image design 500'd on any image-only submission (a real, previously-untested bug: `raw_uploads`'s "at least one of text/image_ref" Mongoose validator always failed because nothing ever populated `image_ref`). Built as GridFS storage (`packages/shared/src/db/gridfs.ts`, bucket `workout_images`) rather than a naive inline ref, with transient deletion once a workout reaches a terminal status (see T031/T032's post-hoc notes) — not the durable "retained indefinitely" storage originally implied, since FR-020 was revised for images specifically. Verified: 3 real multipart images produce 3 real GridFS files (queried directly); has_image is set correctly; a full GridFS bucket census after the whole apps/api + apps/worker suites shows zero orphaned files/chunks
 - [X] T043 [US3] Add request validation ensuring at least one of `text` / `images` is present on POST /workouts (400 otherwise, per research.md #8 / data-model.md validation rules) in apps/api/src/workouts/dto/create-workout.dto.ts — note: this 400 already exists today (implemented in T029, service-level, not DTO-level as originally scoped here); what remains for this task specifically is only a cross-field DTO validator, if that's still wanted. **Resolved 2026-09-01: closed without adding the DTO-level cross-field validator — deliberately.** The 400 is already enforced in `IngestionService.ingest()` (`ingestion.service.ts:42-46`: `hasText`/`hasImage` → `BadRequestException`) and covered by a contract test (`tests/contract/workouts.create.spec.ts` → "returns 400 when neither text nor image is provided", re-run and passing 2026-09-01). `create-workout.dto.ts` already carries an explicit comment saying this rule lives in the service, not the DTO, citing data-model.md's "enforced at the ingestion endpoint, not just at write time" — the service *is* that endpoint's logic. Adding a `@ValidateIf`/custom cross-field validator would duplicate one rule across two layers (two things to keep in sync, and the DTO comment would have to contradict itself) for a few-ms-earlier rejection and no behavioural change. Not worth it. **Unrelated finding while verifying:** the multi-image GridFS contract test ("accepts multiple images … stores each in GridFS") fails against the local 11-day-old dev containers — `raw_uploads.image_refs` records 3 ids but the `workout_images` bucket query returns 0 files. Not touched here (out of T043's scope); worth checking whether it also fails in CI or is just stale local Mongo state.
 - [X] T044 [US3] Extend parser worker's image/vision branch: when `raw_uploads.image_refs` is present (now possibly several — research.md #11), fetch each from GridFS and include it in the Claude call as a vision content block — combined with any `text` in the same single request when both are present (research.md #8) — in apps/worker/src/parser/handler.ts. Must run *before* the existing post-terminal-status GridFS cleanup (handler.ts's cleanup already added, research.md #11) — read the images first, then clean up. **Implemented by the user; agent reviewed, hardened, tested, and documented.** `extractWorkoutFromText(text)` → `extractWorkout({ text, images })` in `claude.ts` (one combined `client.messages.stream()` call, `.finalMessage()`); `downloadWorkoutImage` added to `packages/shared/src/db/gridfs.ts`; `image-media-type.ts` sniffs each image's type from magic bytes (renamed from the user's misnamed `extension-extractor.ts`). **Key finding (research.md #14, new): `deepseek-v4-pro` is text-only** — the model literally replied "the image is unsupported". Verified live and switched the vision branch to `deepseek-v4-flash-vision-exp` (only DeepSeek model with vision), chosen per-request by whether images are present; text-only stays on `v4-pro`. Confirmed live that the vision model supports the same streaming / `tools` / `tool_choice: auto` / `thinking`+`tool_use` shape, so the `record_workout` parsing is unchanged. **Bugs found and fixed in the user's draft**: (1) `downloadWorkoutImage` had a `return` inside the Promise executor on the "file not found" branch → the promise never settled → `Promise.all` would hang the whole parse forever; rewritten to reject (a missing image mid-parse is a real fault per research.md #11, not a soft skip like `deleteWorkoutImages`). (2) the existing `parser.spec.ts` "deletes GridFS images once terminal status" test broke — `seedWorkoutWithImages` uploaded `Buffer.from('fake-image-N')`, which the new magic-byte sniff correctly rejects → workout stuck retrying → `waitForStatus` timeout; fixed the helper to upload a real 1×1 PNG fixture. (3) prompt template literal carried ~16 spaces of source indentation into every API call — flattened. `ai_response_raw` is now populated on every parse (serialized model response, research.md #11). **Tests**: new `apps/worker/src/parser/image-media-type.spec.ts` (4 pure unit tests, CI-runnable — the only T044 coverage that runs without a real vision key); 3 new integration tests in `parser.spec.ts` (image-only via vision model + `ai_response_raw` stored; combined text+image → one call, bench-press comes through; `downloadWorkoutImage` round-trip + rejects on a dead ref). Full worker suite green (19/19) against live Postgres/Mongo/RabbitMQ + real DeepSeek. **Deferred**: `-exp` model is experimental (no fallback provider wired); a genuinely-unreadable uploaded image goes to retry→DLQ→`failed` rather than `needs_review` (bounded, acceptable per spec.md Q4's "rely on downstream error handling")
-- [ ] T045 [US3] Extend Telegram webhook to accept photo messages (capturing the photo's caption as `text` in the same call, per research.md #8) and route them into the ingestion service (as `images`, plural — research.md #11) in apps/api/src/telegram/telegram.controller.ts — **note for whoever picks this up**: Telegram sends each photo of an album as a *separate* update sharing one `media_group_id`, not as one atomic update with multiple photos — needs a short debounce buffer (e.g. accumulate by `media_group_id`, flush after ~1.5s of no new photo in the group) before calling into the ingestion service once per album, not once per photo. Not designed in detail yet — raised by the user (research.md #11) but genuinely deferred, since Telegram itself (T038-T041) isn't built yet either
+- ~~T045 [US3] Extend Telegram webhook to accept photo messages~~ — **cancelled 2026-09-04** with Phase 4 (Telegram descoped). Photo upload from the web (T046) covers US3's photo path.
 - [X] T046 [P] [US3] Implement apps/web "upload photo" control in apps/web/app/dashboard/log-photo-form.tsx — multi-file input (up to `MAX_WORKOUT_IMAGES`=10, research.md #11), not single-file as originally scoped. **Done by the user; agent reviewed and finished it.** Not a separate `log-photo-form.tsx` — folded into the existing form, which the user renamed `log-text-form.tsx` → `log-workout-form.tsx` (`LogTextForm` → `LogWorkoutForm`), since one unified text-and-images form is the intent. `<input type="file" multiple>`, each selected file appended as its own `images` part (matches `CreateWorkoutDto`'s `Buffer[]`), 10-image cap enforced client-side. **Client-side validation is UX-only, deliberately not mirrored on the backend** (spec.md Clarifications Q4 / research.md #14 — the API accepts any file and relies on the parser worker's magic-byte sniff): rejects a positively-wrong MIME type (but lets an empty `file.type` through, since some real images report none — the worker sniffs the bytes regardless), rejects >10MB, caps the count. **Agent fixes on the user's draft**: (1) the form blocked image-only submissions — `<textarea required>` + submit `disabled` unless text was non-empty — so US3's own flow ("log a workout from a photo", no text) was impossible from the web; now submit is enabled on text **or** ≥1 image, and `text` is only sent when non-empty. (2) object-URL leak on unmount — added a ref-mirrored unmount-only `useEffect` that revokes any still-live previews. (3) `errorMessage(400)` copy updated ("Add some workout text or at least one image."). **Preview thumbnails / per-image remove UI deliberately deferred** (the user is reworking dashboard UX in a later spec) — `ImageObject.preview` is created and lifecycle-managed but not yet rendered. Verified: `tsc --noEmit`, `eslint`, and a full `next build` (static export, T019) all clean. End-to-end photo upload is exercised in quickstart.md / T054, not an automated test (apps/web has no test runner)
 
-**Checkpoint**: All three logging paths (text/web, text/Telegram, photo) are independently functional (quickstart.md Story 3)
+**Checkpoint**: Both web logging paths (text, photo) are independently functional (quickstart.md Story 3)
 
 ---
 
@@ -160,7 +159,6 @@ description: "Task list for Workout Logging MVP"
 - **Foundational (Phase 2)**: Depends on Setup completion — BLOCKS all user stories
 - **User Stories (Phase 3–6)**: All depend on Foundational phase completion
   - US1 has no dependency on other stories
-  - US2 depends on US1's ingestion service (T029) being in place, but is otherwise independently testable once linked
   - US3 depends on US1's ingestion service (T029) and parser handler (T031), extending both
   - US4 depends on US1's parser publishing `workout.parsed` (T031)
   - Recommended order given these dependencies: P1 → P2 → P3 → P4 (matches spec.md priority order)
@@ -171,10 +169,9 @@ description: "Task list for Workout Logging MVP"
 - All Setup tasks marked [P] (T003–T008, T010) can run in parallel after T001–T002
 - Foundational tasks marked [P] (T011, T012, T014–T016, T018, T019, T022, T024, T025) can run in parallel once their file-level prerequisites (T013, T017, T020, T021, T023) are in place
 - Within US1: T026, T027, T033, T034 are [P] (different concerns in the same file — coordinate route registration order, but logic is independent)
-- Within US2: T038, T040, T041 are [P]
 - Within US3: T046 is [P]
 - Within US4: T049 is [P]
-- Different user story phases (US1–US4) can be staffed in parallel by different developers once Phase 2 is complete, though US2–US4 each extend a file US1 created (see Dependencies above)
+- Different user story phases (US1–US4) can be staffed in parallel by different developers once Phase 2 is complete, though US3–US4 each extend a file US1 created (see Dependencies above)
 
 ---
 
@@ -204,7 +201,6 @@ Task: "Implement GET /workouts/:id in apps/api/src/workouts/workouts.controller.
 
 1. Complete Setup + Foundational → Foundation ready
 2. Add User Story 1 → validate via quickstart.md → deploy/demo (MVP!)
-3. Add User Story 2 (Telegram) → validate → deploy/demo
 4. Add User Story 3 (photos) → validate → deploy/demo
 5. Add User Story 4 (dashboard chart) → validate → deploy/demo
 6. Phase 7 polish (account deletion, validation hardening, logging) can land alongside any of the above once its prerequisites exist
