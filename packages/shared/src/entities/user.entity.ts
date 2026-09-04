@@ -1,6 +1,5 @@
 import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn } from 'typeorm';
 import { RefreshToken } from './refresh-token.entity';
-import { TelegramLinkCode } from './telegram-link-code.entity';
 import { Workout } from './workout.entity';
 
 @Entity('users')
@@ -14,7 +13,10 @@ export class User {
   @Column({ type: 'text' })
   passwordHash!: string;
 
-  // bigint columns come back as string from node-postgres (avoids unsafe-integer loss).
+  // Legacy Telegram column (bigint → string from node-postgres). Telegram was
+  // descoped (spec.md US2); the linking flow that would set this was never built
+  // and telegram_link_codes has been dropped. Kept for now — a follow-up
+  // migration can remove the column + its unique constraint.
   @Column({ type: 'bigint', nullable: true, unique: true })
   telegramChatId!: string | null;
 
@@ -29,7 +31,4 @@ export class User {
 
   @OneToMany(() => RefreshToken, (refreshToken) => refreshToken.user)
   refreshTokens!: RefreshToken[];
-
-  @OneToMany(() => TelegramLinkCode, (linkCode) => linkCode.user)
-  telegramLinkCodes!: TelegramLinkCode[];
 }

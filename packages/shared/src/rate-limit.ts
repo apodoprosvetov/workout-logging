@@ -51,21 +51,10 @@ export async function checkRateLimit(client: Redis, config: RateLimitConfig): Pr
 // FR-018: ingestion rate-limited to 30 requests/minute/user.
 export const INGEST_RATE_LIMIT = { windowMs: 60_000, limit: 30 };
 
-// FR-005: linking-code attempts limited to 5/hour/account.
-export const LINK_CODE_RATE_LIMIT = { windowMs: 60 * 60_000, limit: 5 };
-
 export function ingestRateLimitKey(userId: string): string {
   return `ratelimit:ingest:${userId}`;
 }
 
-export function linkCodeRateLimitKey(userId: string): string {
-  return `ratelimit:link:${userId}`;
-}
-
 export async function checkIngestRateLimit(client: Redis, userId: string): Promise<RateLimitResult> {
   return checkRateLimit(client, { key: ingestRateLimitKey(userId), ...INGEST_RATE_LIMIT });
-}
-
-export async function checkLinkCodeRateLimit(client: Redis, userId: string): Promise<RateLimitResult> {
-  return checkRateLimit(client, { key: linkCodeRateLimitKey(userId), ...LINK_CODE_RATE_LIMIT });
 }

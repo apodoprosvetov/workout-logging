@@ -60,9 +60,11 @@ Delivers value on its own even before Telegram or photo logging exist.
 > reconsidered — a conversational MCP server (its own future spec) is a
 > better fit for where this product is heading (editing, incremental
 > logging, analysis, templates) than a one-shot bot. FR-003–006 and SC-004
-> below are deferred with this story. The `telegram_link_codes` table and
-> `users.telegram_chat_id` column already exist (InitialSchema migration)
-> and are left in place, unused. US1/US3/US4 do not depend on this story.
+> below are deferred with this story. The `telegram_link_codes` table (and
+> its `TelegramLinkCode` entity + linking-code rate-limit helpers) was
+> **dropped** on 2026-09-04 (migration `DropTelegramLinkCodes`); the unused
+> `users.telegram_chat_id` column remains, to be dropped by a follow-up.
+> US1/US3/US4 do not depend on this story.
 
 A person links their Telegram account to their profile using a one-time
 code, then logs workouts by simply messaging the bot from the gym floor,
@@ -214,14 +216,15 @@ history list and a correct weekly-volume-per-muscle-group chart.
   workout (exercises/sets) and the AI's raw response — is retained
   indefinitely by default (revised 2026-08-21, research.md #11).
 - **FR-021**: Users MUST be able to delete their account, which MUST
-  delete all associated data (workouts, uploads, and any Telegram
-  linking record if one is ever created).
+  delete all associated data (workouts, uploads, tokens, and every
+  derived cache scoped to the user).
 
 ### Key Entities *(include if feature involves data)*
 
 - **User**: An account holder, identified by email.
-- **Linking Code**: _(Binds a Telegram chat to an account.)_ **Deferred
-  with User Story 2** — the table exists but is unused.
+- **Linking Code**: _(Binds a Telegram chat to an account.)_ **Removed
+  with User Story 2** — the `telegram_link_codes` table was dropped
+  2026-09-04.
 - **Workout**: A single logged training session for a user — has a
   status (pending / parsed / needs review / failed), a source (currently
   always `web`), and when it was performed.

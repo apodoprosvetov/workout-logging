@@ -27,22 +27,14 @@ adjusted for decisions made in [spec.md](./spec.md) (Clarifications) and
 | `expires_at` | timestamptz | issued_at + 30 days |
 | `revoked_at` | timestamptz, nullable | set on rotation/logout |
 
-### `telegram_link_codes` — DESCOPED (spec.md US2, 2026-09-04)
+### `telegram_link_codes` — REMOVED (2026-09-04)
 
-Table exists (InitialSchema migration) but is never written to — Telegram
-was descoped from the MVP. Left in place; a future migration can drop it.
-
-| Field | Type | Notes |
-|---|---|---|
-| `id` | uuid, PK | |
-| `user_id` | uuid, FK → users.id | |
-| `code` | text, unique | short one-time code |
-| `expires_at` | timestamptz | issued_at + 10 minutes (FR-003) |
-| `used_at` | timestamptz, nullable | set on successful `/start <code>` |
-
-Rate limiting of attempts (FR-005: 5/hour/account) is enforced via a
-Redis counter keyed by `user_id`, not a Postgres column — see Redis
-section.
+Created by InitialSchema, never written to (the Telegram linking flow was
+never built), **dropped** by migration `DropTelegramLinkCodes1788506977000`.
+The `TelegramLinkCode` entity and the linking-code rate-limit helpers
+(`LINK_CODE_RATE_LIMIT` / `linkCodeRateLimitKey` / `checkLinkCodeRateLimit`,
+old FR-005) were deleted with it. `users.telegram_chat_id` is a separate
+column and is still present (unused) — a follow-up migration can drop it.
 
 ### `workouts`
 
@@ -97,7 +89,7 @@ section.
 
 **Relationships**: one `workout` → many `workout_exercises` (ordered) →
 many `sets` (ordered) each. One `user` → many `workouts`,
-`refresh_tokens`, `telegram_link_codes`.
+`refresh_tokens`.
 
 **Validation rules**:
 - `sets.reps` > 0, `sets.weight` >= 0.
@@ -107,9 +99,6 @@ many `sets` (ordered) each. One `user` → many `workouts`,
 - `workouts.user_id` MUST match the authenticated caller on every read
   and write (FR-015) — enforced in `apps/api`'s data-access layer, not
   optional per-query.
-- `telegram_link_codes.code` single-use: `used_at` must be null to
-  redeem; redemption sets it in the same transaction that sets
-  `users.telegram_chat_id` (FR-004).
 
 **State transitions** (`workouts.status`):
 
@@ -176,7 +165,6 @@ deleted on account deletion.
 
 - `ratelimit:ingest:{user_id}` — sliding-window counter, 30/minute
   (FR-018).
-- `ratelimit:link:{user_id}` — counter, 5/hour (FR-005).
 - `weekly_volume:{user_id}:{iso_week}` — hash of `muscle_group →
   volume` (`iso_week` = `YYYY-Www`), where volume = `Σ weight × reps`
   over that week's `parsed`/`needs_review` workouts, full set volume
@@ -189,11 +177,13 @@ deleted on account deletion.
 
 ## Account Deletion (FR-021)
 
-Deleting an account MUST remove: the `users` row (or hard-delete after
+Implemented as `DELETE /auth/account` (T050 — `AuthService.deleteAccount`).
+Deleting an account MUST remove: the `users` row (hard delete after
 cascading — soft-delete via `deleted_at` is only an intermediate step
 if a grace period is wanted later, not required for MVP), all
-`workouts`/`workout_exercises`/`sets` for that user (cascade delete),
-all `refresh_tokens` and `telegram_link_codes`, all MongoDB
-`raw_uploads` for that user, and all Redis keys scoped to that
-`user_id`. `exercise_catalog` and shared `exercises` rows are never
-user-owned and are unaffected.
+`workouts`/`workout_exercises`/`sets` for that user (explicit ORM cascade
+in one transaction — the FKs are `ON DELETE NO ACTION`), all
+`refresh_tokens`, all MongoDB `raw_uploads` for that user plus the GridFS
+image bytes they reference, and all Redis keys scoped to that `user_id`
+(`ratelimit:ingest:{id}`, every `weekly_volume:{id}:*`). `exercise_catalog`
+and shared `exercises` rows are never user-owned and are unaffected.

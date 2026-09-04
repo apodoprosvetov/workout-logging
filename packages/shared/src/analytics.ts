@@ -34,6 +34,12 @@ export function weeklyVolumeRedisKey(userId: string, isoWeek: string): string {
   return `weekly_volume:${userId}:${isoWeek}`;
 }
 
+// SCAN MATCH pattern for every weekly-volume hash belonging to a user (one per
+// ISO week) — used by account deletion (FR-021) to drop them all at once.
+export function weeklyVolumeRedisKeyPattern(userId: string): string {
+  return `weekly_volume:${userId}:*`;
+}
+
 // Monday 00:00 UTC of the given ISO week (`YYYY-Www`) — the inverse of
 // isoWeekKey, for turning a `?week=` query param back into a date to feed
 // computeWeeklyVolume. Throws on a malformed string.

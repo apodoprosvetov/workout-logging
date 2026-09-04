@@ -31,8 +31,9 @@ or body parameter (FR-015).
 
 `POST /telegram/link-code` and `POST /telegram/webhook` were never
 built. Telegram is deferred to a future spec (a conversational MCP
-server). The `telegram_link_codes` table + `users.telegram_chat_id`
-column exist but are unused.
+server). The `telegram_link_codes` table was dropped 2026-09-04
+(migration `DropTelegramLinkCodes`); the unused `users.telegram_chat_id`
+column remains for now.
 
 ## Ingestion
 

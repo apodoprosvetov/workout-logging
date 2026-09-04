@@ -1,7 +1,19 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { isUniqueViolation, User } from '@workout-logging/shared';
-import { Repository } from 'typeorm';
+import { ConflictException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import {
+  deleteWorkoutImages,
+  getWorkoutImagesBucket,
+  ingestRateLimitKey,
+  isUniqueViolation,
+  RawUploadDocument,
+  User,
+  weeklyVolumeRedisKeyPattern,
+} from '@workout-logging/shared';
+import type Redis from 'ioredis';
+import { Connection, Model } from 'mongoose';
+import { DataSource, Repository } from 'typeorm';
+import { REDIS_CLIENT } from '../redis/redis.module';
 import { AuthTokensService } from './auth-tokens.service';
 
 export interface AuthTokenResponse {
@@ -15,8 +27,14 @@ export interface RegisterResult extends AuthTokenResponse {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @InjectModel('RawUpload') private readonly rawUploadModel: Model<RawUploadDocument>,
+    @InjectConnection() private readonly mongoConnection: Connection,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly authTokensService: AuthTokensService,
   ) {}
 
@@ -69,5 +87,63 @@ export class AuthService {
       access_token: this.authTokensService.issueAccessToken(rotated.userId),
       refresh_token: rotated.refreshToken,
     };
+  }
+
+  // FR-021 / data-model.md "Account Deletion": erase the user and every trace of
+  // their data across all three stores. Ordered so a partial failure converges
+  // on a retry — every step is idempotent (re-deleting already-gone rows/keys is
+  // a no-op) and safe to repeat:
+  //
+  //   1. Postgres, in one transaction: children before parents (all FKs are
+  //      ON DELETE NO ACTION), ending with the `users` row. If this throws,
+  //      nothing else has been touched yet and the account still exists.
+  //   2. MongoDB: the GridFS image bytes (usually already gone — transient,
+  //      research.md #11 — hence best-effort), then the `raw_uploads` docs.
+  //   3. Redis: the caller's ingest rate-limit counter and every weekly-volume hash.
+  //
+  // The `exercise_catalog` / shared `exercises` rows are never user-owned and
+  // are left alone.
+  async deleteAccount(userId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      await manager.query(
+        `DELETE FROM sets WHERE workout_exercise_id IN (
+           SELECT we.id FROM workout_exercises we
+           JOIN workouts w ON w.id = we.workout_id
+           WHERE w.user_id = $1)`,
+        [userId],
+      );
+      await manager.query(
+        `DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE user_id = $1)`,
+        [userId],
+      );
+      await manager.query(`DELETE FROM workouts WHERE user_id = $1`, [userId]);
+      await manager.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
+      await manager.query(`DELETE FROM users WHERE id = $1`, [userId]);
+    });
+
+    const rawUploads = await this.rawUploadModel.find({ user_id: userId }, { image_refs: 1 }).lean();
+    const imageRefs = rawUploads.flatMap((doc) => doc.image_refs ?? []);
+    if (imageRefs.length > 0) {
+      await deleteWorkoutImages(getWorkoutImagesBucket(this.mongoConnection), imageRefs);
+    }
+    await this.rawUploadModel.deleteMany({ user_id: userId });
+
+    const weeklyVolumeKeys = await this.scanKeys(weeklyVolumeRedisKeyPattern(userId));
+    await this.redis.del(ingestRateLimitKey(userId), ...weeklyVolumeKeys);
+
+    this.logger.log(`deleted account ${userId} (${imageRefs.length} images, ${weeklyVolumeKeys.length} weekly hashes)`);
+  }
+
+  // Cursor-based SCAN (never KEYS — that blocks Redis) for every key matching a
+  // glob. Fine at this project's scale: a user has at most ~1 hash per week.
+  private async scanKeys(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    let cursor = '0';
+    do {
+      const [next, batch] = await this.redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = next;
+      found.push(...batch);
+    } while (cursor !== '0');
+    return found;
   }
 }

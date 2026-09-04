@@ -68,9 +68,9 @@ special tuning
 
 **Constraints**: JWT access token short-lived (15 min) + rotating
 refresh token; ingestion rate-limited to 30 requests/minute/user
-(FR-018, via Redis); linking codes limited to 5 attempts/hour/account
-(FR-005); secrets via environment variables only (FR-019); event
-processing must be idempotent on `event_id` (FR-014)
+(FR-018, via Redis); secrets via environment variables only (FR-019);
+event processing must be idempotent on `event_id` (FR-014). _(FR-005
+linking-code rate limit dropped with the Telegram descope, 2026-09-04.)_
 
 **Scale/Scope**: Single real user in practice, but every table/query
 scoped by `user_id` so a second account requires no schema change;
