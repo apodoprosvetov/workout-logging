@@ -231,6 +231,17 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 400 for free text past the 50k length cap (T051)', async () => {
+    const { accessToken } = await registerAndGetToken('longtext');
+
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('text', 'x'.repeat(50_001));
+
+    expect(res.status).toBe(400);
+  });
+
   it('rate-limits at 30/minute/user (FR-018) — the 31st request in a minute gets 429', async () => {
     const { accessToken } = await registerAndGetToken('ratelimit');
 

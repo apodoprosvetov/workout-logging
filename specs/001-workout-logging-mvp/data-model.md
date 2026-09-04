@@ -11,7 +11,7 @@ adjusted for decisions made in [spec.md](./spec.md) (Clarifications) and
 | Field | Type | Notes |
 |---|---|---|
 | `id` | uuid, PK | |
-| `email` | text, unique | |
+| `email` | text, unique | stored trimmed + lowercased — register and login normalise identically (T051) so the unique constraint is case-insensitive in practice |
 | `password_hash` | text | argon2 (research.md #6) |
 | `telegram_chat_id` | bigint, nullable, unique | column exists; the linking flow that would set it is **descoped** (spec.md US2, 2026-09-04) — always null |
 | `created_at` | timestamptz | |

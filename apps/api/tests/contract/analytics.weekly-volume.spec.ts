@@ -157,6 +157,15 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
     expect(res.status).toBe(400);
   });
 
+  it('returns 400 for an out-of-range week number (T051)', async () => {
+    for (const w of ['2026-W00', '2026-W54', '2026-W99']) {
+      const res = await request(httpServer(app))
+        .get(`/api/analytics/weekly-volume?week=${w}`)
+        .set('authorization', `Bearer ${accessToken}`);
+      expect(res.status, w).toBe(400);
+    }
+  });
+
   it('defaults to the current ISO week and returns an empty list when there is nothing', async () => {
     const res = await request(httpServer(app))
       .get('/api/analytics/weekly-volume')

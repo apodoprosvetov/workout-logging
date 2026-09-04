@@ -5,20 +5,26 @@ All endpoints served by `apps/api`. All except `/auth/*` require
 authenticated `user_id` comes from the token only — never from a path
 or body parameter (FR-015).
 
+Every request body / query param is validated by a class-validator DTO
+through the global `ValidationPipe` (`whitelist` + `forbidNonWhitelisted`
++ `transform`, T023/T051): an unknown field, a wrong type, or a
+constraint violation is a `400` before the handler runs.
+
 ## Auth
 
 ### `POST /auth/register`
-- Body: `{ email: string, password: string }`
+- Body: `{ email: string (≤254, trimmed + lowercased), password: string (8–200) }`
 - 201: `{ access_token, refresh_token, user: { id, email } }`
+- 400: invalid email, password outside 8–200 chars, unknown field
 - 409: email already registered
 
 ### `POST /auth/login`
-- Body: `{ email: string, password: string }`
+- Body: `{ email: string (normalised as above), password: string (≤200) }`
 - 200: `{ access_token, refresh_token }`
 - 401: invalid credentials
 
 ### `POST /auth/refresh`
-- Body: `{ refresh_token: string }`
+- Body: `{ refresh_token: string (non-empty, ≤512) }`
 - 200: `{ access_token, refresh_token }` (old refresh token revoked, new one issued)
 - 401: refresh token invalid/expired/revoked
 
@@ -39,8 +45,9 @@ column remains for now.
 
 ### `POST /workouts`
 - Auth required. Rate-limited: 30/minute/user (FR-018).
-- Multipart body: `text?: string`, `images?: file[]` (repeat the field for
-  each image; max `MAX_WORKOUT_IMAGES` = 10 — 400 past that), `performed_at?: ISO8601`.
+- Multipart body: `text?: string` (≤50 000 chars — 400 past that),
+  `images?: file[]` (repeat the field for each image; max
+  `MAX_WORKOUT_IMAGES` = 10 — 400 past that), `performed_at?: ISO8601`.
   At least one of `text` / `images` MUST be present — 400 if neither
   (research.md #8, #11). Both may be present at once (e.g. a photo with a text note in one
   submission), and multiple images may be present at once (e.g. a
@@ -67,7 +74,8 @@ column remains for now.
 
 ### `GET /analytics/weekly-volume`
 - Auth required. Scoped to caller.
-- Query: `?week=` (ISO week, default current)
+- Query: `?week=YYYY-Www` (ISO week, week 01–53; default current) — 400 on a
+  malformed or out-of-range value
 - 200: `{ week: string, volumes: [{ muscle_group: string, volume: number }] }`
 - Reads Redis cache first, falls back to a Postgres computation on
   cache miss (FR-016), per data-model.md.

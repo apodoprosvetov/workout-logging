@@ -78,6 +78,14 @@ describe('POST /auth/refresh (contract, per contracts/api.md)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 400 for an over-long refresh_token (T051)', async () => {
+    const res = await request(httpServer(app))
+      .post('/api/auth/refresh')
+      .send({ refresh_token: 'a'.repeat(513) });
+
+    expect(res.status).toBe(400);
+  });
+
   it('the new access_token carries the correct user id', async () => {
     const { refresh_token } = await registerAndGetTokens('sub');
     const res = await request(httpServer(app)).post('/api/auth/refresh').send({ refresh_token });

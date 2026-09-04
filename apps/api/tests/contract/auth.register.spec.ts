@@ -58,6 +58,29 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('normalizes email (trim + lowercase) so a mixed-case address logs in (T051)', async () => {
+    const email = emails.next('case');
+    const reg = await request(httpServer(app))
+      .post('/api/auth/register')
+      .send({ email: `  ${email.toUpperCase()}  `, password: 'correct horse battery staple' });
+
+    expect(reg.status).toBe(201);
+    expect(reg.body.user.email).toBe(email); // stored canonicalised
+
+    const login = await request(httpServer(app))
+      .post('/api/auth/login')
+      .send({ email, password: 'correct horse battery staple' });
+    expect(login.status).toBe(200);
+  });
+
+  it('returns 400 for an over-long password (argon2 DoS guard, T051)', async () => {
+    const res = await request(httpServer(app))
+      .post('/api/auth/register')
+      .send({ email: emails.next('longpw'), password: 'x'.repeat(201) });
+
+    expect(res.status).toBe(400);
+  });
+
   it('returns 400 for an unexpected extra field (forbidNonWhitelisted)', async () => {
     const res = await request(httpServer(app))
       .post('/api/auth/register')

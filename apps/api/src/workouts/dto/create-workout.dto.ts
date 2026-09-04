@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsISO8601, IsOptional, IsString } from 'class-validator';
+import { ArrayMaxSize, IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { MAX_WORKOUT_IMAGES } from '@workout-logging/shared';
 
@@ -8,8 +8,12 @@ import { MAX_WORKOUT_IMAGES } from '@workout-logging/shared';
 // endpoint, not just at write time"), not duplicated here as cross-field
 // DTO validation.
 export class CreateWorkoutDto {
+  // No per-image size limit in the MVP (spec.md Q4), but free text is bounded:
+  // 50k chars is ~10k words — orders of magnitude past any real workout log,
+  // while still stopping a pathological blob from reaching Mongo and DeepSeek.
   @IsOptional()
   @IsString()
+  @MaxLength(50_000)
   text?: string;
 
   @IsOptional()

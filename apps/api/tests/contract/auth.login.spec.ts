@@ -32,6 +32,15 @@ describe('POST /auth/login (contract, per contracts/api.md)', () => {
     expect(res.body.user).toBeUndefined();
   });
 
+  it('accepts the registered email with different case and surrounding whitespace (T051)', async () => {
+    const res = await request(httpServer(app))
+      .post('/api/auth/login')
+      .send({ email: `  ${registeredEmail.toUpperCase()} `, password });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.access_token).toBe('string');
+  });
+
   it('returns 401 for a wrong password', async () => {
     const res = await request(httpServer(app))
       .post('/api/auth/login')
