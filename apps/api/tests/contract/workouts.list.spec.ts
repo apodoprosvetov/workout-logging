@@ -71,6 +71,13 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     expect(res.status).toBe(401);
   });
 
+  it('returns 401 for a tampered bearer token (signature check, T053)', async () => {
+    const [h, p] = accessToken.split('.');
+    const forged = `${h}.${p}.deadbeefdeadbeefdeadbeefdeadbeef`;
+    const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${forged}`);
+    expect(res.status).toBe(401);
+  });
+
   it("returns only the caller's own workouts, sorted by performedAt (not createdAt), newest first (FR-015)", async () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();

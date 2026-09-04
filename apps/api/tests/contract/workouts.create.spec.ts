@@ -122,6 +122,40 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a forged user_id in the body — the owner comes from the token only (FR-015, T053)', async () => {
+    const { accessToken } = await registerAndGetToken('spoofbody');
+    const victim = await registerAndGetToken('spoofvictim');
+
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('text', 'bench press 80kg x5')
+      .field('user_id', victim.email); // not a DTO field → forbidNonWhitelisted
+
+    expect(res.status).toBe(400);
+  });
+
+  it('the created workout is owned by the token subject, not anyone else (FR-015, T053)', async () => {
+    const { accessToken } = await registerAndGetToken('ownercheck');
+    const sub = JSON.parse(
+      Buffer.from(accessToken.split('.')[1], 'base64url').toString(),
+    ).sub as string;
+
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('text', 'deadlift 100kg x5');
+    expect(res.status).toBe(202);
+
+    const ds = createTypeOrmDataSource();
+    await ds.initialize();
+    const [row] = (await ds.query('SELECT user_id FROM workouts WHERE id = $1', [res.body.workout_id])) as Array<{
+      user_id: string;
+    }>;
+    await ds.destroy();
+    expect(row.user_id).toBe(sub);
+  });
+
   it('accepts multiple images under the same "images" field (research.md #11), stores each in GridFS, and records has_image', async () => {
     const { accessToken } = await registerAndGetToken('multiimage');
     const res = await request(httpServer(app))
