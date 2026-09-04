@@ -1,15 +1,21 @@
-# FR-002/FR-003: every push/PR runs spec 001's Vitest/Supertest suites
-# against real Postgres/MongoDB/Redis/RabbitMQ (not mocked, matching
+# FR-002/FR-003: runs spec 001's Vitest/Supertest suites against real
+# Postgres/MongoDB/Redis/RabbitMQ (not mocked, matching
 # apps/api/tests/helpers/test-app.ts's own testing philosophy) and fails
-# the run — and therefore blocks merge, once branch protection requires
-# this check — on any test failure.
+# the run on any test failure.
+#
+# Triggers:
+#   - pull_request → the gate for merging into main.
+#   - workflow_call → invoked by deploy.yml as its first job on every push
+#     to main, so a red suite blocks the deploy (deploy.yml's `deploy` job
+#     `needs: [ci]`). There is deliberately no `push` trigger here — that
+#     would run CI detached from deploy again, which is the exact bug this
+#     wiring fixes (CI red, deploy still shipped to prod).
 name: CI
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_call: {}
 
 jobs:
    

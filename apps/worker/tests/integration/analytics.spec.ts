@@ -29,6 +29,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { WorkerContext } from '../../src/index.js';
 import { registerAnalyticsConsumer } from '../../src/analytics/handler.js';
 
+// 'bench-press' -> 'Bench Press' (the canonical exercise_catalog display name).
+function slugToName(slug: string): string {
+  return slug
+    .split('-')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 // No AI here — just Postgres + Mongo + RabbitMQ + Redis, so this runs in CI.
 describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)', () => {
   let dataSource: DataSource;
@@ -103,9 +111,12 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     for (const ex of exercises) {
       order += 1;
       const exerciseRepo = dataSource.getRepository(Exercise);
+      // Canonical display name (not the bare slug) — the `exercises` table is
+      // shared with the apps/api contract specs and never cleaned up, and one
+      // of them asserts on `name` (workouts.get.spec.ts).
       const exercise =
         (await exerciseRepo.findOneBy({ slug: ex.slug })) ??
-        (await exerciseRepo.save(exerciseRepo.create({ slug: ex.slug, name: ex.slug })));
+        (await exerciseRepo.save(exerciseRepo.create({ slug: ex.slug, name: slugToName(ex.slug) })));
       const we = await dataSource.getRepository(WorkoutExercise).save(
         dataSource.getRepository(WorkoutExercise).create({
           workoutId: workout.id,

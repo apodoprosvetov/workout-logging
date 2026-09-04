@@ -25,6 +25,14 @@ interface Volume {
   volume: number;
 }
 
+// 'bench-press' -> 'Bench Press' (the canonical exercise_catalog display name).
+function slugToName(slug: string): string {
+  return slug
+    .split('-')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => {
   let app: NestFastifyApplication;
   const emails = testEmailFactory('analytics-weekly');
@@ -69,9 +77,16 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
       let order = 0;
       for (const ex of exercises) {
         order += 1;
+        // The `exercises` catalog table is shared across all contract specs
+        // and never cleaned up (afterAll only removes per-user rows). Create
+        // missing rows with their canonical display name — not the slug — so
+        // a spec that asserts on `name` (e.g. workouts.get.spec.ts) isn't
+        // poisoned by whichever spec touches `bench-press` first on a fresh DB.
         const exercise =
           (await ds.getRepository(Exercise).findOneBy({ slug: ex.slug })) ??
-          (await ds.getRepository(Exercise).save(ds.getRepository(Exercise).create({ slug: ex.slug, name: ex.slug })));
+          (await ds
+            .getRepository(Exercise)
+            .save(ds.getRepository(Exercise).create({ slug: ex.slug, name: slugToName(ex.slug) })));
         const we = await ds.getRepository(WorkoutExercise).save(
           ds.getRepository(WorkoutExercise).create({ workoutId: workout.id, exerciseId: exercise.id, exerciseOrder: order }),
         );

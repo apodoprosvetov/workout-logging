@@ -14,9 +14,22 @@ on:
 permissions:
   id-token: write # needs to be able to request an OIDC token from GitHub for AWS STS
   contents: read
+  pull-requests: read # for the reusable CI workflow's gitleaks (secret-scan) job
 
 jobs:
+  # Gate: run the full CI suite (ci.yml) first on a push. If it goes red the
+  # `deploy` job below is skipped, so a failing test never reaches prod.
+  # Skipped on workflow_dispatch — a manual rollback ships a previously-green
+  # image and must not be blocked by CI flakes on an unrelated newer commit.
+  ci:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: [ci]
+    # always() so this still evaluates when `ci` was skipped (dispatch);
+    # then require ci to have either passed or been skipped.
+    if: always() && (needs.ci.result == 'success' || needs.ci.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

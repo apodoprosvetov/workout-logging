@@ -22,8 +22,9 @@ npm run dev                   # predev brings up Postgres/Mongo/Redis/RabbitMQ v
 
 - API on `:3000`, web on `:3001`.
 - `npm test` runs the Vitest/Supertest suites against the real containers (not mocked).
-- Same suite runs in CI (`.github/workflows/ci.yml`) on every push/PR, plus a
-  `gitleaks` secret scan.
+- Same suite runs in CI (`.github/workflows/ci.yml`) on every PR, plus a `gitleaks`
+  secret scan. On a push to `main`, `deploy.yml` runs `ci.yml` first (via
+  `workflow_call`) and only deploys if it passes — a red suite blocks the deploy.
 
 ## Architecture (production)
 
@@ -51,6 +52,8 @@ Images are pulled from ECR by commit SHA — the instance never builds.
 
 Push to `main` → `.github/workflows/deploy.yml` runs automatically:
 
+0. Run the full CI suite (`ci.yml` via `workflow_call`). If it fails, the deploy
+   job is skipped — nothing ships. Skipped for `workflow_dispatch` rollbacks.
 1. Build & push `apps/api`, `apps/worker` images to ECR, tagged with the commit SHA.
 2. Build `apps/web`, `aws s3 sync` to the web bucket, invalidate CloudFront.
 3. Over SSM (no SSH): `git checkout` the SHA on the instance, `docker compose pull`,

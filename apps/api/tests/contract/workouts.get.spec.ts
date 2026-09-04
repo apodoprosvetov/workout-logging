@@ -49,11 +49,18 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
     // Postgres `exercises` rows aren't seeded like Mongo's exercise_catalog
     // (packages/shared/src/db/seed-exercise-catalog.ts) — they're normally
     // created lazily by the worker, so the test creates its own fixture
-    // instead of relying on incidental prior state.
+    // instead of relying on incidental prior state. The row is shared with
+    // other contract specs and never cleaned up, so force the canonical
+    // name — a spec that ran first may have created it as the bare slug.
     const exerciseRepository = ds.getRepository(Exercise);
-    const exercise =
-      (await exerciseRepository.findOneBy({ slug: 'bench-press' })) ??
-      (await exerciseRepository.save(exerciseRepository.create({ slug: 'bench-press', name: 'Bench Press' })));
+    let exercise = await exerciseRepository.findOneBy({ slug: 'bench-press' });
+    if (!exercise) {
+      exercise = await exerciseRepository.save(
+        exerciseRepository.create({ slug: 'bench-press', name: 'Bench Press' }),
+      );
+    } else if (exercise.name !== 'Bench Press') {
+      await exerciseRepository.update({ id: exercise.id }, { name: 'Bench Press' });
+    }
 
     const workout = await ds.getRepository(Workout).save(
       ds.getRepository(Workout).create({
