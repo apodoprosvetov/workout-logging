@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
@@ -6,6 +6,7 @@ import {
   getWorkoutImagesBucket,
   ingestRateLimitKey,
   isUniqueViolation,
+  logLine,
   RawUploadDocument,
   User,
   weeklyVolumeRedisKeyPattern,
@@ -27,8 +28,6 @@ export interface RegisterResult extends AuthTokenResponse {
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
     @InjectRepository(User) private readonly userRepository: Repository<User>,
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -131,7 +130,12 @@ export class AuthService {
     const weeklyVolumeKeys = await this.scanKeys(weeklyVolumeRedisKeyPattern(userId));
     await this.redis.del(ingestRateLimitKey(userId), ...weeklyVolumeKeys);
 
-    this.logger.log(`deleted account ${userId} (${imageRefs.length} images, ${weeklyVolumeKeys.length} weekly hashes)`);
+    logLine('api', 'info', 'account deleted', {
+      context: 'AuthService',
+      userId,
+      images: imageRefs.length,
+      weeklyHashes: weeklyVolumeKeys.length,
+    });
   }
 
   // Cursor-based SCAN (never KEYS — that blocks Redis) for every key matching a

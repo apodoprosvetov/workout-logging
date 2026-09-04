@@ -11,6 +11,7 @@ import {
 } from '@workout-logging/shared';
 import type { ConsumeMessage } from 'amqplib';
 import type { WorkerContext } from '../index.js';
+import { log } from '../logger.js';
 
 // A week's cached volume is refreshed on every workout.parsed for that week, so
 // it never really goes stale — this TTL only evicts weeks that see no further
@@ -34,7 +35,11 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
     await recomputeWeek(context, event);
     context.channel.ack(msg);
   } catch (err) {
-    console.error(`analytics failed for workout ${event.workout_id}`, err);
+    log.error('analytics recompute failed', {
+      workout_id: event.workout_id,
+      event_id: event.event_id,
+      err,
+    });
     await handleAnalyticsFailure(context, msg, event);
   }
 }
@@ -80,12 +85,24 @@ async function handleAnalyticsFailure(
   const attempt = getRetryAttempt(msg) + 1;
   const retryQueue = retryQueueForAttempt(WORKOUT_ANALYTICS_QUEUE, attempt);
   if (retryQueue) {
+    log.warn('analytics queued for retry', {
+      workout_id: event.workout_id,
+      event_id: event.event_id,
+      attempt,
+      retry_queue: retryQueue,
+    });
     context.channel.sendToQueue(retryQueue, msg.content, {
       persistent: true,
       headers: { [RETRY_ATTEMPT_HEADER]: attempt },
     });
   } else {
-    console.error(`analytics gave up on workout ${event.workout_id} after ${attempt - 1} retries`);
+    // Dropped, not dead-lettered: apps/api's Postgres fallback rebuilds the
+    // cache on the next dashboard read, so there's nothing to recover.
+    log.error('analytics exhausted retries — dropped', {
+      workout_id: event.workout_id,
+      event_id: event.event_id,
+      attempts: attempt - 1,
+    });
   }
   context.channel.ack(msg);
 }

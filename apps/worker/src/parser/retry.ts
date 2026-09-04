@@ -14,6 +14,7 @@ import {
 import type { ConsumeMessage } from 'amqplib';
 import type { DataSource } from 'typeorm';
 import type { WorkerContext } from '../index.js';
+import { log } from '../logger.js';
 
 export { getRetryAttempt };
 
@@ -52,18 +53,29 @@ export async function handleParseFailure(
   if (retryQueue) {
     // Carry the attempt counter forward — it survives the TTL dead-letter hop
     // back to workout.parse.q, so the next failure lands one tier deeper.
+    log.warn('parse queued for retry', {
+      workout_id: event.workout_id,
+      event_id: event.event_id,
+      attempt: attemptNumber,
+      retry_queue: retryQueue,
+    });
     context.channel.sendToQueue(retryQueue, msg.content, {
       persistent: true,
       headers: { [RETRY_ATTEMPT_HEADER]: attemptNumber },
     });
   } else {
+    log.error('parse exhausted retries — dead-lettered and marked failed', {
+      workout_id: event.workout_id,
+      event_id: event.event_id,
+      attempt: attemptNumber,
+    });
     context.channel.sendToQueue(WORKOUT_DLQ, msg.content, { persistent: true });
     try {
       await markWorkoutFailed(context.dataSource, event.workout_id);
     } catch (err) {
       // Best-effort per contracts/events.md — the DLQ message is still the
       // source of truth for manual recovery even if this write fails too.
-      console.error(`failed to mark workout ${event.workout_id} as failed`, err);
+      log.error('failed to mark workout failed', { workout_id: event.workout_id, err });
     }
 
     // Exhausted: no further retries will read raw_uploads again — images are
@@ -77,7 +89,11 @@ export async function handleParseFailure(
         await deleteWorkoutImages(getWorkoutImagesBucket(context.mongoConnection), rawUpload.image_refs);
       }
     } catch (err) {
-      console.error(`failed to delete workout_images for raw_upload ${event.raw_upload_ref}`, err);
+      log.error('failed to delete workout_images after DLQ', {
+        workout_id: event.workout_id,
+        raw_upload_ref: event.raw_upload_ref,
+        err,
+      });
     }
   }
 

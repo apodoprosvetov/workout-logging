@@ -65,6 +65,13 @@ Datastore containers (`postgres`/`mongo`/`redis`/`rabbitmq`) are only touched wh
 `infra/docker-compose.prod.yml` itself changes; Caddy only restarts when
 `infra/Caddyfile` changes.
 
+### Logs
+
+`apps/api` and `apps/worker` emit one JSON object per line (`{ts, level, svc, msg, …}`)
+to stdout/stderr — `docker compose -f infra/docker-compose.prod.yml logs -f api-1 | jq`,
+or `… | jq 'select(.level=="error")'` for just the failures. `svc` is `api` or
+`worker`; request lines carry `method`/`path`/`status`/`durationMs`/`userId`.
+
 ## Rollback
 
 Redeploy an already-built previous version — no new build, no new commit:

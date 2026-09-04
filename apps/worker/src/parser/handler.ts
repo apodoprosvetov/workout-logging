@@ -23,6 +23,7 @@ import { extractWorkout } from './claude.js';
 import { matchAndUpsertExercise } from './exercise-matcher.js';
 import { handleParseFailure, markWorkoutFailed, NonRetryableParseError } from './retry.js';
 import { detectImageMediaType, ImageMediaType } from './image-media-type.js';
+import { log } from '../logger.js';
 
 export function registerParserConsumer(context: WorkerContext): void {
   void context.channel.consume(
@@ -51,22 +52,33 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
         Buffer.from(JSON.stringify(outcome.result)),
         { persistent: true },
       );
+      log.info('workout parsed', {
+        workout_id: event.workout_id,
+        event_id: event.event_id,
+        exercise_count: outcome.result.exercise_count,
+      });
+    } else {
+      log.info('workout.uploaded redelivered, already processed', { workout_id: event.workout_id, event_id: event.event_id });
     }
     context.channel.ack(msg);
   } catch (err) {
     if (err instanceof NonRetryableParseError) {
       // Nothing to parse and retrying won't change that — mark failed and drop
       // it rather than looping it through the retry tiers.
-      console.error(`parse abandoned for workout ${event.workout_id}: ${err.message}`);
+      log.warn('parse abandoned (non-retryable)', {
+        workout_id: event.workout_id,
+        event_id: event.event_id,
+        reason: err.message,
+      });
       try {
         await markWorkoutFailed(context.dataSource, event.workout_id);
       } catch (markErr) {
-        console.error(`failed to mark workout ${event.workout_id} as failed`, markErr);
+        log.error('failed to mark workout failed', { workout_id: event.workout_id, err: markErr });
       }
       context.channel.ack(msg);
       return;
     }
-    console.error(`parse failed for workout ${event.workout_id}`, err);
+    log.error('parse failed', { workout_id: event.workout_id, event_id: event.event_id, err });
     await handleParseFailure(context, msg, event);
   }
 }
@@ -185,7 +197,11 @@ async function processWorkout(
     try {
       await deleteWorkoutImages(getWorkoutImagesBucket(context.mongoConnection), rawUpload.image_refs);
     } catch (err) {
-      console.error(`failed to delete workout_images for raw_upload ${rawUpload._id.toString()}`, err);
+      log.error('failed to delete workout_images after terminal status', {
+        workout_id: event.workout_id,
+        raw_upload_ref: rawUpload._id.toString(),
+        err,
+      });
     }
   }
 

@@ -12,6 +12,7 @@ import type { Redis } from 'ioredis';
 import type { DataSource } from 'typeorm';
 import { registerParserConsumer } from './parser/handler.js';
 import { registerAnalyticsConsumer } from './analytics/handler.js';
+import { log } from './logger.js';
 
 export interface WorkerContext {
   dataSource: DataSource;
@@ -41,7 +42,7 @@ async function bootstrap(): Promise<void> {
     register(context);
   }
 
-  console.log(`apps/worker started (${consumers.length} consumer(s) registered)`);
+  log.info('worker started', { consumers: consumers.length });
 
   // Guarded against firing twice — a double signal delivery (e.g. tsx watch's own
   // SIGINT forwarding, or the usual SIGTERM-then-SIGKILL from process managers)
@@ -50,7 +51,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`${signal} received, shutting down...`);
+    log.info('shutdown signal received', { signal });
     await channel.close();
     await connection.close();
     await mongoConnection.close();
@@ -64,6 +65,6 @@ async function bootstrap(): Promise<void> {
 }
 
 bootstrap().catch((err: unknown) => {
-  console.error('apps/worker failed to start', err);
+  log.error('worker failed to start', { err });
   process.exit(1);
 });

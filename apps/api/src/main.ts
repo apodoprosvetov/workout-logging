@@ -6,9 +6,18 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
+import { registerRequestLogging } from './common/request-logging';
+import { StructuredLogger } from './common/structured-logger';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
+    bufferLogs: true,
+  });
+
+  // Route every Nest log (services, bootstrap, lifecycle) through the shared
+  // structured JSON logger (T052). bufferLogs above holds the early lines until
+  // this is set so nothing bypasses it.
+  app.useLogger(new StructuredLogger());
 
   // apps/web (T035) runs on a different origin/port and calls this API
   // directly from the browser via fetch — without this, every request 404s
@@ -33,6 +42,7 @@ async function bootstrap(): Promise<void> {
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new AllExceptionsFilter());
+  registerRequestLogging(app);
 
   const port = app.get(ConfigService).get<number>('PORT') ?? 3000;
   await app.listen(port, '0.0.0.0');

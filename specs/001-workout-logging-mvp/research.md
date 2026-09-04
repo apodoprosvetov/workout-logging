@@ -529,3 +529,28 @@ Phase 1 design can proceed without unknowns.
   (T045). The `apps/web` multi-file upload control (T046) is done — one
   unified text-and-images form (`log-workout-form.tsx`), submit enabled
   on text or ≥1 image.
+
+## 15. Structured logging (T052)
+
+- **Decision**: One JSON object per line — `{ts, level, svc, msg, ...fields}` —
+  emitted straight to stdout/stderr from a ~40-line dependency-free helper
+  (`packages/shared/src/log.ts`: `logLine()` / `createLogger()`). info/debug →
+  stdout, warn/error → stderr.
+- **Rationale**: A parseable line is everything a personal-scale service needs;
+  `docker logs | jq 'select(.level=="error")'` and CloudWatch's JSON parsing
+  both consume it as-is. `pino`/`winston` would add a dependency and config
+  surface for no benefit here. stderr for warn+ so `docker logs` severity
+  splitting and most shippers do the right thing by default.
+- **apps/api**: `StructuredLogger` (a Nest `LoggerService` adapter, wired via
+  `app.useLogger` + `bufferLogs: true`) routes every `new Logger(ctx)` line and
+  Nest's own bootstrap logs through `logLine`. A Fastify `onResponse` hook
+  (`common/request-logging.ts`) writes one access line per request
+  (method, path, status, durationMs, userId) — a hook, not a Nest interceptor,
+  so it covers unmatched routes and sidesteps the monorepo's two `rxjs` installs.
+  `AllExceptionsFilter` logs any 5xx with request context (client still gets a
+  bare 500); 4xx are left to the request line's `warn`.
+- **apps/worker**: `createLogger('worker')` (`src/logger.ts`); every `console.*`
+  replaced with `log.info/warn/error(msg, {workout_id, event_id, attempt, err})`
+  — structured fields, not string interpolation. Retry-tier routing and the
+  DLQ/failed transitions now log; a successful parse logs one `workout parsed`
+  line.
