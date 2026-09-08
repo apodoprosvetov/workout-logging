@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiJson } from '@services/api-client';
+import { getWeeklyVolume } from '@services/analytics';
 import { weekKeyForOffset, type WeeklyVolumeResponse } from '@lib/analytics';
 
 // FR-017: weekly training volume per muscle group. One measure across ~10
@@ -22,7 +22,7 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
     setError(null);
     setData(null);
     try {
-      setData(await apiJson<WeeklyVolumeResponse>(`/analytics/weekly-volume?week=${weekKeyForOffset(offset)}`));
+      setData(await getWeeklyVolume(weekKeyForOffset(offset)));
     } catch {
       setError('Could not load your weekly volume. Please try again.');
     }

@@ -2,11 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
-import { loadTokens } from '@services/api-client';
-
-function hasStoredSession(): boolean {
-  return loadTokens() !== null;
-}
+import { hasSession } from '@services/auth';
 
 // localStorage (T025's token store) is external mutable state, not React
 // state — useSyncExternalStore is the documented primitive for this
@@ -20,7 +16,7 @@ function subscribe(callback: () => void): () => void {
 }
 
 function getSnapshot(): boolean {
-  return hasStoredSession();
+  return hasSession();
 }
 
 function getServerSnapshot(): boolean {
@@ -43,9 +39,9 @@ export function useRequireAuth(): boolean {
     // the server) and only re-syncs to the real client snapshot a tick later —
     // keying the redirect off `authenticated` bounces every page refresh to
     // /login before that sync lands. Here in the effect we're on the client
-    // with localStorage readable, so loadTokens() is the source of truth.
+    // with localStorage readable, so hasSession() is the source of truth.
     // `authenticated` stays in the deps so a cross-tab logout re-runs this.
-    if (!hasStoredSession()) {
+    if (!hasSession()) {
       router.replace('/login');
     }
   }, [authenticated, router]);

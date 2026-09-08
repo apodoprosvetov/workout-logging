@@ -152,9 +152,11 @@ apps/web/
 │   └── workouts/               # workout-list.tsx, workout-detail.tsx
 ├── hooks/
 │   └── use-require-auth.ts     # MOVED from services/ (FR-026)
-├── services/
-│   ├── api-client.ts
-│   ├── workouts.ts             # NEW: getWorkout / listWorkouts / deleteWorkout
+├── services/                   # the only place that speaks HTTP
+│   ├── api-client.ts           # transport: bearer token, 401 refresh-and-retry
+│   ├── auth.ts                 # NEW: register / login / logout / hasSession
+│   ├── analytics.ts            # NEW: getWeeklyVolume
+│   ├── workouts.ts             # NEW: listWorkouts / getWorkout / deleteWorkout
 │   └── workout-events.ts       # NEW: the logged-workout store (FR-011/FR-012)
 ├── lib/
 │   ├── analytics.ts            # week math, mirrors packages/shared's isoWeekKey

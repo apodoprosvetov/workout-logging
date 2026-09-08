@@ -7,14 +7,14 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { clearTokens } from '@services/api-client';
+import { logout } from '@services/auth';
 import { LogWorkoutButton } from '@components/log-workout-button';
 
 export function Header({ showLogout = true }: { showLogout?: boolean }) {
   const router = useRouter();
 
   function handleLogout(): void {
-    clearTokens();
+    logout();
     router.push('/login');
   }
 

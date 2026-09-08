@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { apiFetchPublic, saveTokens, type StoredTokens } from '@services/api-client';
+import { login, register, type AuthFailure } from '@services/auth';
 
 interface AuthFormProps {
   mode: 'register' | 'login';
@@ -17,7 +17,7 @@ const COPY = {
     switchPrompt: 'Already have an account?',
     switchLinkLabel: 'Log in',
     switchHref: '/login',
-    path: '/auth/register',
+    submit: register,
   },
   login: {
     heading: 'Log in',
@@ -26,16 +26,19 @@ const COPY = {
     switchPrompt: "Don't have an account?",
     switchLinkLabel: 'Register',
     switchHref: '/register',
-    path: '/auth/login',
+    submit: login,
   },
 } as const;
 
-function errorMessage(mode: AuthFormProps['mode'], status: number): string {
-  if (mode === 'register' && status === 409) return 'An account with this email already exists.';
-  if (mode === 'login' && status === 401) return 'Invalid email or password.';
-  if (status === 400) return 'Please check your email and password and try again.';
-  return 'Something went wrong. Please try again.';
-}
+// Domain outcome -> what the person reading the screen is told. No status
+// codes: services/auth.ts owns the HTTP, this owns the English.
+const FAILURE_MESSAGE: Record<AuthFailure, string> = {
+  email_taken: 'An account with this email already exists.',
+  invalid_credentials: 'Invalid email or password.',
+  invalid_input: 'Please check your email and password and try again.',
+  unavailable: 'Could not reach the server. Please try again.',
+  unknown: 'Something went wrong. Please try again.',
+};
 
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
@@ -50,19 +53,14 @@ export function AuthForm({ mode }: AuthFormProps) {
     setError(null);
     setSubmitting(true);
     try {
-      const response = await apiFetchPublic(copy.path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!response.ok) {
-        setError(errorMessage(mode, response.status));
+      // The service stores the session on success — signing in *is* that — so
+      // there is nothing to save here, only somewhere to go.
+      const result = await copy.submit({ email, password });
+      if (!result.ok) {
+        setError(FAILURE_MESSAGE[result.failure]);
         return;
       }
-      saveTokens((await response.json()) as StoredTokens);
       router.push('/dashboard');
-    } catch {
-      setError('Could not reach the server. Please try again.');
     } finally {
       setSubmitting(false);
     }
