@@ -94,6 +94,40 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     expect(elapsedMs).toBeLessThan(2000);
   });
 
+  it('echoes back the performed_at it was given', async () => {
+    const { accessToken } = await registerAndGetToken('echo-date');
+    const performedAt = new Date('2013-11-04T00:00:00.000Z');
+
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('text', 'squat 100kg x5')
+      .field('performed_at', performedAt.toISOString());
+
+    expect(res.status).toBe(202);
+    expect(res.body.performed_at).toBe(performedAt.toISOString());
+  });
+
+  it('returns the date it chose when performed_at was omitted', async () => {
+    // The whole reason this field is in the response: the caller cannot know
+    // the default otherwise, and a client that recomputed it would be
+    // duplicating server behaviour (specs/003, T017).
+    const { accessToken } = await registerAndGetToken('default-date');
+
+    const before = Date.now();
+    const res = await request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`)
+      .field('text', 'overhead press 40kg x10');
+    const after = Date.now();
+
+    expect(res.status).toBe(202);
+    expect(typeof res.body.performed_at).toBe('string');
+    const returned = new Date(res.body.performed_at as string).getTime();
+    expect(returned).toBeGreaterThanOrEqual(before);
+    expect(returned).toBeLessThanOrEqual(after);
+  });
+
   it('really did write to Postgres, MongoDB, and publish to workout.parse.q', async () => {
     const { accessToken } = await registerAndGetToken('sideeffects');
     const res = await request(httpServer(app))

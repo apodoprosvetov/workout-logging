@@ -55,8 +55,17 @@ column remains for now.
 - No format/size validation per image in MVP (spec.md Clarifications, Q4).
   Image bytes are transient — deleted once parsing reaches a terminal
   status (research.md #11); only the derived structured data is retained.
-- 202: `{ workout_id: uuid, status: "pending" }` — returned in < 2s
-  (FR-009/SC-002); parsing happens asynchronously.
+- `performed_at` is optional. When omitted the server dates the workout at the
+  moment of the request. This is contractual, not incidental — a client that
+  needs the date must be able to rely on it rather than re-implement it.
+- 202: `{ workout_id: uuid, status: "pending", performed_at: ISO8601 }` —
+  returned in < 2s (FR-009/SC-002); parsing happens asynchronously.
+  `performed_at` is echoed back so the caller knows the date the workout
+  landed on even when it supplied none.
+- Caveat on `performed_at`: when the caller did **not** supply it, the parser
+  may later move the workout to a date it finds in the text. The response
+  states where the workout landed at creation; following it afterwards needs
+  live updates (spec 003 FR-013), which the MVP does not have.
 
 ## Reading data
 

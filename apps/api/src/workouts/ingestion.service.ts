@@ -27,6 +27,8 @@ export interface IngestInput {
 export interface IngestResult {
   workoutId: string;
   status: WorkoutStatus;
+  /** The date the workout was stored under — the caller's, or the default. */
+  performedAt: Date;
 }
 
 @Injectable()
@@ -87,6 +89,13 @@ export class IngestionService {
     };
     this.publisher.publish(WORKOUT_UPLOADED_ROUTING_KEY, event);
 
-    return { workoutId: workout.id, status: workout.status };
+    // performedAt is returned, not just stored: when the caller omits it this
+    // is the only way to learn the date the workout actually landed on, and a
+    // client that guessed would be duplicating the `?? new Date()` above.
+    // Note it can still move later — the parser overwrites it with a date
+    // found in the text when performedAtExplicit is false
+    // (apps/worker parser/handler.ts), which is the live-updates problem
+    // (specs/003 FR-013), not something this response can cover.
+    return { workoutId: workout.id, status: workout.status, performedAt: workout.performedAt };
   }
 }

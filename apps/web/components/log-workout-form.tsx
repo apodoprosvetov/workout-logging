@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { apiFetch } from '@services/api-client';
+import { ApiError } from '@services/api-client';
+import { createWorkout } from '@services/workouts';
 import { publishWorkoutLogged } from '@services/workout-events';
 
 interface LogWorkoutFormProps {
@@ -99,14 +100,21 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
       });
       if (performedAt) body.set('performed_at', performedAt);
 
-      // FormData body: no content-type header here — fetch sets the correct
-      // multipart boundary itself; apps/api's POST /workouts expects
-      // multipart, not JSON (T030, @fastify/multipart keyValues mode).
-      const response = await apiFetch('/workouts', { method: 'POST', body });
-      if (!response.ok) {
-        setError(errorMessage(response.status));
+      // FormData body: no content-type header is set anywhere in this path —
+      // fetch supplies the multipart boundary itself, and apps/api's
+      // POST /workouts expects multipart, not JSON (@fastify/multipart).
+      let created;
+      try {
+        created = await createWorkout(body);
+      } catch (err) {
+        // Only the server's own refusals are turned into a message here;
+        // anything else (the request never completed) belongs to the outer
+        // catch, which says so rather than blaming the input.
+        if (!(err instanceof ApiError)) throw err;
+        setError(errorMessage(err.status));
         return;
       }
+
       setText('');
       setPerformedAt('');
 
@@ -117,12 +125,11 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
       }
 
       // Tell whatever lists are on screen (FR-011), and where the workout
-      // landed so the dashboard can follow it (FR-012). `performedAt` is the
-      // date input's `YYYY-MM-DD`, which the API reads as UTC midnight; with
-      // the field left blank the API dates it now, so that is what we publish.
-      publishWorkoutLogged(
-        performedAt ? new Date(`${performedAt}T00:00:00.000Z`).toISOString() : new Date().toISOString(),
-      );
+      // landed so the dashboard can follow it (FR-012). The date comes from the
+      // response, not from this form's field: when the field is blank the
+      // server picks the date, and recomputing it here would duplicate a
+      // decision that is the server's (contracts/api.md, POST /workouts).
+      publishWorkoutLogged(created.performed_at);
 
       onLogged();
     } catch {

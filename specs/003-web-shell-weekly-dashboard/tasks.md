@@ -124,7 +124,7 @@ than trusting this note.
 - [X] T025 [P] [US3] In `apps/web/components/sidebar/sidebar.tsx`, render navigation to `/dashboard` and `/workouts` marking the current section with `aria-current="page"` (FR-016)
 - [X] T026 [US3] In `apps/web/app/(main)/page.tsx`, route `/` to `/dashboard` when a session exists and `/login` when it does not, reading the token store directly so a refresh does not flash through `/login` before the external store re-syncs (FR-017)
 - [X] T027 [US3] Confirm every signed-in screen (`apps/web/features/dashboard/dashboard.tsx`, `apps/web/features/workouts/workout-list.tsx`, `apps/web/features/workouts/workout-detail.tsx`) gates on `useRequireAuth` and renders nothing until the check resolves, so no personal data paints before a redirect (FR-018)
-- [ ] T028 [US3] Confirm that clearing the session in another tab stops the open tab from showing personal data, via the `storage` event subscription in `apps/web/hooks/use-require-auth.ts` (spec.md → Edge Cases)
+- [X] T028 [US3] Confirm that clearing the session in another tab stops the open tab from showing personal data, via the `storage` event subscription in `apps/web/hooks/use-require-auth.ts` (spec.md → Edge Cases)
 - [X] T029 [US3] Confirm signed-out screens offer neither the logging action nor sign-out, per the `(auth)` layout's `showLogout={false}` and T022's authentication gate (FR-020)
 
 **Checkpoint**: quickstart.md Scenario 7 passes, including no full document load on sign-in or sign-out

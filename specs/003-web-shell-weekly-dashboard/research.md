@@ -2,7 +2,7 @@
 
 **Feature**: 003-web-shell-weekly-dashboard | **Date**: 2026-09-08
 
-Twelve decisions. Most of this feature already exists in the working tree, so
+Thirteen decisions. Most of this feature already exists in the working tree, so
 several entries record *why the existing shape stays* as much as what to
 build; where the review found a gap, the entry says what replaces it.
 
@@ -315,6 +315,9 @@ thin for that reason; the second list endpoint gets to reshape it.
 
 ---
 
+
+---
+
 ## 12. The session store announces its own changes
 
 **Added 2026-09-08**, resolving convergence findings F1/F2 (tasks T044, T045).
@@ -360,3 +363,44 @@ replaces.
 - **Trust `event.newValue` from the `storage` event** instead of invalidating
   and re-reading. Rejected: it would give the store two sources of truth for no
   gain, and `newValue` is null for a `clear()`.
+
+---
+
+## 13. POST /workouts returns the date it stored
+
+**Added 2026-09-08**, after review of T017.
+
+**Decision**: `POST /workouts` includes `performed_at` in its 202 response, and
+`contracts/api.md` states that an omitted `performed_at` is defaulted to the
+moment of the request. The logging form reads the date off the response instead
+of computing it.
+
+**Rationale**: FR-012 needs to know which week a new workout landed in, and the
+202 previously answered only `{ workout_id, status }`. The first implementation
+had the client derive the date — the form's own field, or `new Date()` when it
+was blank, mirroring `ingestion.service.ts`'s `input.performedAt ?? new Date()`.
+
+That was wrong in a way worth recording: the default was **not in the
+contract**. `contracts/api.md` documented `performed_at?: ISO8601` and nothing
+about what happens when it is absent, so the client was encoding an
+implementation detail nobody had promised to keep. Returning the value removes
+the duplication at the source — the server knows the date it stored, including
+when it chose it.
+
+**What this does not fix**: when the caller supplies no date, the parser may
+later move the workout to a date found in the text
+(`apps/worker parser/handler.ts`, guarded by `performedAtExplicit`) — and the
+form advertises exactly that ("defaults to today, or a date found in the
+text"). So a workout can leave the week the dashboard just jumped to, seconds
+later. The response states where it landed *at creation*; following it
+afterwards is live updates, deferred by FR-013. Recorded here rather than left
+implicit, because it is the one case where FR-012's guarantee is weaker than it
+reads.
+
+**Alternatives considered**:
+
+- **Document the default and keep computing client-side.** Cheaper, and it
+  would have closed the contract gap. Rejected: two implementations of one rule
+  still drift, and the client's copy is the one nobody tests.
+- **Fetch `GET /workouts/:id` after creating.** Correct, but a second round
+  trip for a field the first response already had in hand.

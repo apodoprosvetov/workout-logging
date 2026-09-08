@@ -27,7 +27,11 @@ export class WorkoutsController {
       source: WorkoutSource.WEB,
     });
 
-    return { workout_id: result.workoutId, status: result.status };
+    return {
+      workout_id: result.workoutId,
+      status: result.status,
+      performed_at: result.performedAt.toISOString(),
+    };
   }
 
   @Get()

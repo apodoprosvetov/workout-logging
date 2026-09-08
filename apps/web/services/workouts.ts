@@ -65,6 +65,32 @@ export async function listWorkouts(query: ListWorkoutsQuery = {}): Promise<Worko
   return apiJson<WorkoutListResponse>(search ? `/workouts?${search}` : '/workouts');
 }
 
+/** What `POST /workouts` answers — the workout exists, parsing has not run yet. */
+export interface CreatedWorkout {
+  workout_id: string;
+  status: WorkoutStatus;
+  /**
+   * The date the workout was stored under: the one supplied, or the one the
+   * server chose when none was. Read it rather than recomputing — the default
+   * is the server's to decide (contracts/api.md).
+   *
+   * It can still move: when no date was supplied, the parser may later replace
+   * it with one found in the text. This is where the workout landed now.
+   */
+  performed_at: string;
+}
+
+/**
+ * POST /workouts — hand raw text and/or images to the parsing pipeline.
+ *
+ * Takes the already-built FormData because the file inputs live in the form;
+ * multipart is the endpoint's contract (@fastify/multipart), so there is no
+ * JSON shape to accept instead.
+ */
+export async function createWorkout(body: FormData): Promise<CreatedWorkout> {
+  return apiJson<CreatedWorkout>('/workouts', { method: 'POST', body });
+}
+
 /**
  * GET /workouts/:id — one workout with its exercises and sets, or `null` when
  * there is no such workout to show.
