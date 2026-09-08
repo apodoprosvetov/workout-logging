@@ -82,10 +82,10 @@ than trusting this note.
 
 - [X] T010 [US1] In `apps/web/features/dashboard/dashboard.tsx`, hold `weeksAgo` (0–12) as the dashboard's only week state, render the week's date range label, and disable the forward control at `weeksAgo === 0` and the backward control at `weeksAgo === 12` rather than clamping silently (FR-001, FR-002, FR-003)
 - [X] T011 [US1] In `apps/web/features/dashboard/weekly-workouts.tsx`, derive the request window as `after = week start`, `before = week start + 7 days` — derived from the start, never from the Sunday `end`, which would drop every workout performed on the week's final day (FR-005, data-model.md → TrainingWeek)
-- [ ] T012 [US1] In `apps/web/features/dashboard/weekly-workouts.tsx`, send an explicit `limit=100` on the week request; without it the API applies `DEFAULT_LIMIT = 20` and a busy week silently loses its 21st workout (FR-007, research #4)
+- [X] T012 [US1] In `apps/web/features/dashboard/weekly-workouts.tsx`, send an explicit `limit=100` on the week request; without it the API applies `DEFAULT_LIMIT = 20` and a busy week silently loses its 21st workout (FR-007, research #4)
 - [X] T013 [P] [US1] In `apps/web/features/dashboard/volume-chart.tsx`, scope the volume request to the selected week's ISO key via `weekKeyForOffset`, so the chart and the list always describe the same week (FR-004)
 - [X] T014 [US1] Render the weekly list in `apps/web/features/dashboard/weekly-workouts.tsx` through the shared `WorkoutTable` from T008, removing the duplicated row markup (FR-024)
-- [ ] T015 [P] [US1] Fix the copy in `apps/web/features/dashboard/weekly-workouts.tsx`: the error message reads "Could not load your weekly volume" and the empty state reads "matched workouts show up here a moment after parsing" — both were copied from the volume chart and describe the wrong panel (FR-008)
+- [X] T015 [P] [US1] Fix the copy in `apps/web/features/dashboard/weekly-workouts.tsx`: the error message reads "Could not load your weekly volume" and the empty state reads "matched workouts show up here a moment after parsing" — both were copied from the volume chart and describe the wrong panel (FR-008)
 - [X] T016 [US1] Ensure both dashboard panels distinguish loading, empty, and failed states, with the failed state offering a retry that preserves the selected week rather than resetting to the current one (FR-008, contracts/ui-routes.md → Panel states)
 
 **Checkpoint**: The dashboard reviews any of the last 12 weeks; quickstart.md Scenarios 1, 2 and 6 pass

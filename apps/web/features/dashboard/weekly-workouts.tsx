@@ -6,6 +6,12 @@ import { type WorkoutListResponse } from '@lib/workouts';
 import { weekRangeForOffset } from '@lib/analytics';
 import { WorkoutTable } from '@components/workout-table';
 
+// A week is a bounded window, so it is asked for whole rather than paged. The
+// API applies its own DEFAULT_LIMIT of 20 when no limit is given, which would
+// silently drop a busy week's 21st workout (FR-007). 100 is the maximum the
+// endpoint accepts and is far above any real training week.
+const WEEK_LIMIT = 100;
+
 export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
   const [data, setData] = useState<WorkoutListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,9 +26,15 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
       // `before` is exclusive, so it must be the start of the day *after* the
       // week's last day — otherwise every workout on Sunday is dropped.
       const before = new Date(sunday.getTime() + 86_400_000);
-      setData(await listWorkouts({ after: monday.toISOString(), before: before.toISOString() }));
+      setData(
+        await listWorkouts({
+          after: monday.toISOString(),
+          before: before.toISOString(),
+          limit: WEEK_LIMIT,
+        }),
+      );
     } catch {
-      setError('Could not load your weekly volume. Please try again.');
+      setError('Could not load the workouts for this week. Please try again.');
     }
   }, []);
 
@@ -76,9 +88,7 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
       {!error && data === null && <p className="text-sm text-zinc-500">Loading…</p>}
 
       {!error && data !== null && data.workouts.length === 0 && (
-        <p className="text-sm text-zinc-500">
-          No workouts for this week yet — matched workouts show up here a moment after parsing.
-        </p>
+        <p className="text-sm text-zinc-500">No workouts logged for this week.</p>
       )}
 
       {!error && data !== null && data.workouts.length > 0 && (
