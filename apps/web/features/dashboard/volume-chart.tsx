@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getWeeklyVolume } from '@services/analytics';
+import { useWorkoutLog } from '@services/workout-events';
 import { weekKeyForOffset, type WeeklyVolumeResponse } from '@lib/analytics';
 
 // FR-017: weekly training volume per muscle group. One measure across ~10
@@ -18,6 +19,11 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
   const [data, setData] = useState<WeeklyVolumeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // A logged workout changes this week's volume once the worker parses it, so
+  // refetch on a log too (FR-011). Volume for a still-pending workout is 0, so
+  // the refetch may show no change yet — that is FR-013, not a bug here.
+  const { revision } = useWorkoutLog();
+
   const load = useCallback(async (offset: number) => {
     setError(null);
     setData(null);
@@ -32,7 +38,7 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
     // React's documented fetch-in-effect pattern (no data lib in this project).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load(weeksAgo);
-  }, [weeksAgo, load]);
+  }, [weeksAgo, revision, load]);
 
   const max = data && data.volumes.length > 0 ? data.volumes[0].volume : 0;
 

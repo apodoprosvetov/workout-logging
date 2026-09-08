@@ -100,11 +100,11 @@ than trusting this note.
 
 **Depends on**: T009 (the store)
 
-- [ ] T017 [US2] In `apps/web/components/log-workout-form.tsx`, publish to the T009 store after `POST /workouts` succeeds — incrementing `revision` and setting `lastPerformedAt` to the workout's performed date; publish exactly once, and never on validation failure, network error, or dismissal (FR-011, contracts/ui-routes.md → Producer)
-- [ ] T018 [P] [US2] In `apps/web/features/workouts/workout-list.tsx`, subscribe to `revision` and refetch the current page when it changes (FR-011)
-- [ ] T019 [P] [US2] In `apps/web/features/dashboard/weekly-workouts.tsx`, subscribe to `revision` and refetch the selected week when it changes (FR-011)
-- [ ] T020 [P] [US2] In `apps/web/features/dashboard/volume-chart.tsx`, subscribe to `revision` and refetch the selected week when it changes — a logged workout changes that week's volume once parsed (FR-011)
-- [ ] T021 [US2] In `apps/web/features/dashboard/dashboard.tsx`, on a `revision` change compare `lastPerformedAt`'s ISO week against the week on screen and switch `weeksAgo` to that workout's week when they differ; the week must change *before* the panels refetch, so a cross-week log costs one fetch per panel rather than two (FR-012, contracts/ui-routes.md → Ordering)
+- [X] T017 [US2] In `apps/web/components/log-workout-form.tsx`, publish to the T009 store after `POST /workouts` succeeds — incrementing `revision` and setting `lastPerformedAt` to the workout's performed date; publish exactly once, and never on validation failure, network error, or dismissal (FR-011, contracts/ui-routes.md → Producer)
+- [X] T018 [P] [US2] In `apps/web/features/workouts/workout-list.tsx`, subscribe to `revision` and refetch the current page when it changes (FR-011)
+- [X] T019 [P] [US2] In `apps/web/features/dashboard/weekly-workouts.tsx`, subscribe to `revision` and refetch the selected week when it changes (FR-011)
+- [X] T020 [P] [US2] In `apps/web/features/dashboard/volume-chart.tsx`, subscribe to `revision` and refetch the selected week when it changes — a logged workout changes that week's volume once parsed (FR-011)
+- [X] T021 [US2] In `apps/web/features/dashboard/dashboard.tsx`, on a `revision` change compare `lastPerformedAt`'s ISO week against the week on screen and switch `weeksAgo` to that workout's week when they differ; the week must change *before* the panels refetch, so a cross-week log costs one fetch per panel rather than two (FR-012, contracts/ui-routes.md → Ordering)
 - [X] T022 [P] [US2] Confirm `apps/web/components/log-workout-button.tsx` renders nothing for a visitor without a session, so the logging action is offered only when signed in (FR-014)
 - [X] T023 [P] [US2] Confirm the logging modal in `apps/web/components/log-workout-button.tsx` closes without submitting on the close control, Escape, and a backdrop click, and that the form is mounted only while open so its contents and object URLs are discarded each time (FR-010)
 

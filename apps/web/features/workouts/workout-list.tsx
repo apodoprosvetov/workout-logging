@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
+import { useWorkoutLog } from '@services/workout-events';
 import { useRequireAuth } from '@hooks/use-require-auth';
 import { type WorkoutListResponse } from '@lib/workouts';
 import { FIRST_PAGE } from '@lib/pagination';
@@ -30,12 +31,17 @@ export function WorkoutList() {
     }
   }, []);
 
+  // A workout logged from the header belongs at the top of this list, so
+  // refetch when one is announced (FR-011). The revision is the dependency —
+  // the date is the dashboard's business, not this list's.
+  const { revision } = useWorkoutLog();
+
   useEffect(() => {
     // React's documented fetch-in-effect pattern (no data lib in this project) —
     // same as workout-detail.tsx / weekly-workouts.tsx.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (ready) void load(page);
-  }, [ready, page, load]);
+  }, [ready, page, revision, load]);
 
   // Optimistic: the row goes immediately and comes back if the request fails.
   // That is what keeps WorkoutTable stateless — with no in-flight window there

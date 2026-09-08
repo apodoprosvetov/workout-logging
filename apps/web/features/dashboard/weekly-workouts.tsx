@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
+import { useWorkoutLog } from '@services/workout-events';
 import { type WorkoutListResponse } from '@lib/workouts';
 import { weekRangeForOffset } from '@lib/analytics';
 import { WorkoutTable } from '@components/workout-table';
@@ -17,6 +18,10 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
   const [error, setError] = useState<string | null>(null);
 
   const weekRange = useMemo(() => weekRangeForOffset(weeksAgo), [weeksAgo]);
+
+  // Refetch this week when a workout is logged (FR-011). The dashboard has
+  // already moved to the workout's week by the time this runs, if it needed to.
+  const { revision } = useWorkoutLog();
 
   const load = useCallback(async (monday: Date, sunday: Date) => {
     setError(null);
@@ -42,7 +47,7 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
     // React's documented fetch-in-effect pattern (no data lib in this project).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load(weekRange.start, weekRange.end);
-  }, [weekRange, load]);
+  }, [weekRange, revision, load]);
 
   // Optimistic — see workout-list.tsx for the reasoning; same shape, different
   // container (this one holds the whole response object, not a bare array).

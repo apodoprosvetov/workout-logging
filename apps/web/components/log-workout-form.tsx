@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { apiFetch } from '@services/api-client';
+import { publishWorkoutLogged } from '@services/workout-events';
 
 interface LogWorkoutFormProps {
   onLogged: () => void;
@@ -114,6 +115,14 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+
+      // Tell whatever lists are on screen (FR-011), and where the workout
+      // landed so the dashboard can follow it (FR-012). `performedAt` is the
+      // date input's `YYYY-MM-DD`, which the API reads as UTC midnight; with
+      // the field left blank the API dates it now, so that is what we publish.
+      publishWorkoutLogged(
+        performedAt ? new Date(`${performedAt}T00:00:00.000Z`).toISOString() : new Date().toISOString(),
+      );
 
       onLogged();
     } catch {

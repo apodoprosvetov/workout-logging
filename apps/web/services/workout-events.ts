@@ -27,16 +27,22 @@ export interface WorkoutLogSnapshot {
   readonly revision: number;
 
   /**
-   * Performed date of the workout just logged (ISO 8601), or null when the
-   * client does not know it.
+   * Performed date of the workout just logged (ISO 8601), or null only in the
+   * initial snapshot — nothing has been logged in this tab yet.
    *
-   * Null is common, not exceptional: POST /workouts answers
-   * `{ workout_id, status }` and nothing more, so this can only be populated
-   * from the form's own date field. When the user leaves that field empty the
-   * API defaults the date server-side, and the parser worker may later
-   * overwrite it with a date found in the text (see `performedAtExplicit` on
-   * the Workout entity). Consumers MUST treat null as "unknown" and decide
-   * their own fallback — never as "today".
+   * Always a real date after a publish. `POST /workouts` answers
+   * `{ workout_id, status }` and nothing more, so the producer supplies the
+   * date rather than reading it back: the form's own date field when the user
+   * set one, and otherwise today, because the API defaults an absent
+   * `performed_at` to the moment of the request
+   * (`ingestion.service.ts`: `input.performedAt ?? new Date()`). That is read
+   * off the contract, not guessed.
+   *
+   * One limitation it cannot cover: when the date was *not* set explicitly,
+   * the parser worker may later move the workout to a date it found in the
+   * text (`performedAtExplicit` on the Workout entity). This snapshot still
+   * says where the workout landed at creation. Following it afterwards is the
+   * live-updates problem, deferred by FR-013.
    */
   readonly lastPerformedAt: string | null;
 }
@@ -75,11 +81,11 @@ function getServerSnapshot(): WorkoutLogSnapshot {
  * failure, a network error, or dismissal of the form
  * (contracts/ui-routes.md "Producer").
  *
- * `performedAt` is required rather than optional so callers have to decide
- * what they actually know; pass null when the date was not supplied by the
- * user and the server chose it.
+ * `performedAt` is required rather than optional so the caller has to state
+ * where the workout landed — see the field's note for how the form knows it
+ * even when the user left the date blank.
  */
-export function publishWorkoutLogged(performedAt: string | null): void {
+export function publishWorkoutLogged(performedAt: string): void {
   snapshot = Object.freeze({ revision: snapshot.revision + 1, lastPerformedAt: performedAt });
   // Iterate a copy: a listener may unsubscribe (or a component may mount and
   // subscribe) while React processes the notification.

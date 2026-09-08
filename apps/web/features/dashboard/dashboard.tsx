@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from 'react';
 
-import { useRequireAuth } from "@hooks/use-require-auth";
-import { formatDayMonth, weekRangeForOffset } from "@lib/analytics";
-import { VolumeChart } from "./volume-chart";
-import { WeeklyWorkouts } from "./weekly-workouts";
+import { useRequireAuth } from '@hooks/use-require-auth';
+import { useWorkoutLog } from '@services/workout-events';
+import { formatDayMonth, weekRangeForOffset, weeksAgoForDate } from '@lib/analytics';
+import { VolumeChart } from './volume-chart';
+import { WeeklyWorkouts } from './weekly-workouts';
 
 const MAX_WEEKS_BACK = 12;
 
@@ -15,6 +16,31 @@ export default function Dashboard() {
   const [weeksAgo, setWeeksAgo] = useState(0);
 
   const weekRange = weekRangeForOffset(weeksAgo);
+
+  // FR-012: a workout logged into a week other than the one on screen pulls the
+  // dashboard to its week, so the entry is never saved into apparent silence.
+  //
+  // Keyed on `revision`, not on the date: logging a second workout into the
+  // same week must still count as an event, and the user may have navigated
+  // away from that week in between.
+  const { revision, lastPerformedAt } = useWorkoutLog();
+  const seenRevision = useRef(revision);
+
+  useEffect(() => {
+    if (revision === seenRevision.current) return;
+    seenRevision.current = revision;
+    if (lastPerformedAt === null) return;
+
+    // Clamped, not ignored: a workout dated in the future has no week to show
+    // (FR-003), and one older than the window can only be reached at its edge.
+    // Moving as far as we can still tells the user something happened; staying
+    // put would look exactly like the bug this requirement exists to fix.
+    const target = Math.min(MAX_WEEKS_BACK, Math.max(0, weeksAgoForDate(new Date(lastPerformedAt))));
+    // Setting state here rather than during render is deliberate: this reacts
+    // to an external store changing, which is not information render has.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (target !== weeksAgo) setWeeksAgo(target);
+  }, [revision, lastPerformedAt, weeksAgo]);
 
   if (!ready) return null;
 
