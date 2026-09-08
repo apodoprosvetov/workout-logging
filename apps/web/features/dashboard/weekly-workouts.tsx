@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { WorkoutTable } from '@components/workout-table';
 import { weekRangeForOffset } from '@lib/analytics';
@@ -24,7 +24,11 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
   // already moved to the workout's week by the time this runs, if it needed to.
   const { revision } = useWorkoutLog();
 
+  // See volume-chart.tsx: ignore a response a newer request has superseded.
+  const requestSeq = useRef(0);
+
   const load = useCallback(async (monday: Date, sunday: Date) => {
+    const seq = (requestSeq.current += 1);
     setError(null);
     setData(null);
     try {
@@ -32,14 +36,15 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
       // `before` is exclusive, so it must be the start of the day *after* the
       // week's last day — otherwise every workout on Sunday is dropped.
       const before = new Date(sunday.getTime() + 86_400_000);
-      setData(
-        await listWorkouts({
-          after: monday.toISOString(),
-          before: before.toISOString(),
-          per_page: WEEK_PER_PAGE,
-        }),
-      );
+      const result = await listWorkouts({
+        after: monday.toISOString(),
+        before: before.toISOString(),
+        per_page: WEEK_PER_PAGE,
+      });
+      if (seq !== requestSeq.current) return;
+      setData(result);
     } catch {
+      if (seq !== requestSeq.current) return;
       setError('Could not load the workouts for this week. Please try again.');
     }
   }, []);

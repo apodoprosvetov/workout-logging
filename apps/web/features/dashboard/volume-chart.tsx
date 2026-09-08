@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { weekKeyForOffset, type WeeklyVolumeResponse } from '@lib/analytics';
 import { getWeeklyVolume } from '@services/analytics';
@@ -25,12 +25,23 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
   // the refetch may show no change yet — that is FR-013, not a bug here.
   const { revision } = useWorkoutLog();
 
+  // Guards against an out-of-order response overwriting a newer one. Logging a
+  // workout into another week fires two loads in quick succession — one for the
+  // week on screen, then one for the week the dashboard jumps to (FR-012) — and
+  // nothing cancels the first. Without this the older, usually empty, response
+  // can land last and blank the panel. Seen live during the quickstart pass.
+  const requestSeq = useRef(0);
+
   const load = useCallback(async (offset: number) => {
+    const seq = (requestSeq.current += 1);
     setError(null);
     setData(null);
     try {
-      setData(await getWeeklyVolume(weekKeyForOffset(offset)));
+      const result = await getWeeklyVolume(weekKeyForOffset(offset));
+      if (seq !== requestSeq.current) return;
+      setData(result);
     } catch {
+      if (seq !== requestSeq.current) return;
       setError('Could not load your weekly volume. Please try again.');
     }
   }, []);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { WorkoutTable } from '@components/workout-table';
 import { useRequireAuth } from '@hooks/use-require-auth';
@@ -22,12 +22,21 @@ export function WorkoutList() {
   const [result, setResult] = useState<WorkoutListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // See volume-chart.tsx: ignore a response that a newer request has already
+  // superseded. Here it is paging quickly rather than a week jump, but the
+  // failure is the same — the older response lands last and wins.
+  const requestSeq = useRef(0);
+
   const load = useCallback(async (forPage: number) => {
+    const seq = (requestSeq.current += 1);
     setError(null);
     setResult(null);
     try {
-      setResult(await listWorkouts({ page: forPage, per_page: PER_PAGE }));
+      const result = await listWorkouts({ page: forPage, per_page: PER_PAGE });
+      if (seq !== requestSeq.current) return;
+      setResult(result);
     } catch {
+      if (seq !== requestSeq.current) return;
       setError('Could not load your workouts. Please try again.');
     }
   }, []);
