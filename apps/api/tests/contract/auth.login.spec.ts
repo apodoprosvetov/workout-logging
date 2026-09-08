@@ -15,7 +15,9 @@ describe('POST /auth/login (contract, per contracts/api.md)', () => {
     app = await createTestApp([AuthModule]);
 
     registeredEmail = emails.next('base');
-    await request(httpServer(app)).post('/api/auth/register').send({ email: registeredEmail, password });
+    await request(httpServer(app))
+      .post('/api/auth/register')
+      .send({ email: registeredEmail, password });
   });
 
   afterAll(async () => {
@@ -24,7 +26,9 @@ describe('POST /auth/login (contract, per contracts/api.md)', () => {
   });
 
   it('returns 200 with access_token and refresh_token for correct credentials', async () => {
-    const res = await request(httpServer(app)).post('/api/auth/login').send({ email: registeredEmail, password });
+    const res = await request(httpServer(app))
+      .post('/api/auth/login')
+      .send({ email: registeredEmail, password });
 
     expect(res.status).toBe(200);
     expect(typeof res.body.access_token).toBe('string');
@@ -59,21 +63,29 @@ describe('POST /auth/login (contract, per contracts/api.md)', () => {
   });
 
   it('returns 400 for an invalid email format', async () => {
-    const res = await request(httpServer(app)).post('/api/auth/login').send({ email: 'not-an-email', password });
+    const res = await request(httpServer(app))
+      .post('/api/auth/login')
+      .send({ email: 'not-an-email', password });
 
     expect(res.status).toBe(400);
   });
 
   it('returns 400 when password is missing', async () => {
-    const res = await request(httpServer(app)).post('/api/auth/login').send({ email: registeredEmail });
+    const res = await request(httpServer(app))
+      .post('/api/auth/login')
+      .send({ email: registeredEmail });
 
     expect(res.status).toBe(400);
   });
 
   it('issues a working access token distinct from the one issued at registration', async () => {
-    const res = await request(httpServer(app)).post('/api/auth/login').send({ email: registeredEmail, password });
+    const res = await request(httpServer(app))
+      .post('/api/auth/login')
+      .send({ email: registeredEmail, password });
 
-    const payload = JSON.parse(Buffer.from(res.body.access_token.split('.')[1], 'base64url').toString());
+    const payload = JSON.parse(
+      Buffer.from(res.body.access_token.split('.')[1], 'base64url').toString(),
+    );
     expect(typeof payload.sub).toBe('string');
   });
 });

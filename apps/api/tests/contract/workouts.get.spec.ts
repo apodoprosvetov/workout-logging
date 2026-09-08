@@ -29,7 +29,9 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
   let workoutId: string;
   let otherUsersWorkoutId: string;
 
-  async function registerAndGetToken(label: string): Promise<{ userId: string; accessToken: string }> {
+  async function registerAndGetToken(
+    label: string,
+  ): Promise<{ userId: string; accessToken: string }> {
     const email = emails.next(label);
     const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     const body = res.body as { access_token: string; user: { id: string } };
@@ -80,9 +82,13 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
     );
     workoutId = workout.id;
 
-    const workoutExercise = await ds.getRepository(WorkoutExercise).save(
-      ds.getRepository(WorkoutExercise).create({ workoutId, exerciseId: exercise.id, exerciseOrder: 1 }),
-    );
+    const workoutExercise = await ds
+      .getRepository(WorkoutExercise)
+      .save(
+        ds
+          .getRepository(WorkoutExercise)
+          .create({ workoutId, exerciseId: exercise.id, exerciseOrder: 1 }),
+      );
     await ds.getRepository(WorkoutSet).save([
       ds.getRepository(WorkoutSet).create({
         workoutExerciseId: workoutExercise.id,
@@ -120,7 +126,9 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
   afterAll(async () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [emails.all()])) as Array<{
+    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [
+      emails.all(),
+    ])) as Array<{
       id: string;
     }>;
     const userIds = users.map((u) => u.id);
@@ -147,7 +155,9 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
   });
 
   it('returns the full workout with ordered exercises/sets for its owner', async () => {
-    const res = await request(httpServer(app)).get(`/api/workouts/${workoutId}`).set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app))
+      .get(`/api/workouts/${workoutId}`)
+      .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -173,12 +183,16 @@ describe('GET /workouts/:id (contract, per contracts/api.md)', () => {
   });
 
   it('returns 404 for a nonexistent (but validly formatted) id', async () => {
-    const res = await request(httpServer(app)).get(`/api/workouts/${randomUUID()}`).set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app))
+      .get(`/api/workouts/${randomUUID()}`)
+      .set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(404);
   });
 
   it('returns 400 for a malformed id', async () => {
-    const res = await request(httpServer(app)).get('/api/workouts/not-a-uuid').set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app))
+      .get('/api/workouts/not-a-uuid')
+      .set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(400);
   });
 });

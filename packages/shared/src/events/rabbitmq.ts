@@ -58,7 +58,11 @@ export function getRetryAttempt(msg: ConsumeMessage): number {
   return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;
 }
 
-async function setupPrimaryQueue(channel: Channel, queue: string, routingKey: string): Promise<void> {
+async function setupPrimaryQueue(
+  channel: Channel,
+  queue: string,
+  routingKey: string,
+): Promise<void> {
   await channel.assertQueue(queue, { durable: true });
   await channel.bindQueue(queue, WORKOUT_EVENTS_EXCHANGE, routingKey);
 

@@ -47,7 +47,9 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
   // with "current week" assertions.
   const week = isoWeekKey(new Date('2025-03-12T00:00:00.000Z')); // 2025-W11
 
-  async function registerAndGetToken(label: string): Promise<{ userId: string; accessToken: string }> {
+  async function registerAndGetToken(
+    label: string,
+  ): Promise<{ userId: string; accessToken: string }> {
     const email = emails.next(label);
     const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     const body = res.body as { access_token: string; user: { id: string } };
@@ -89,9 +91,13 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
           (await ds
             .getRepository(Exercise)
             .save(ds.getRepository(Exercise).create({ slug: ex.slug, name: slugToName(ex.slug) })));
-        const we = await ds.getRepository(WorkoutExercise).save(
-          ds.getRepository(WorkoutExercise).create({ workoutId: workout.id, exerciseId: exercise.id, exerciseOrder: order }),
-        );
+        const we = await ds
+          .getRepository(WorkoutExercise)
+          .save(
+            ds
+              .getRepository(WorkoutExercise)
+              .create({ workoutId: workout.id, exerciseId: exercise.id, exerciseOrder: order }),
+          );
         let setOrder = 0;
         for (const s of ex.sets) {
           setOrder += 1;
@@ -123,7 +129,9 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
   afterAll(async () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [emails.all()])) as Array<{ id: string }>;
+    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [
+      emails.all(),
+    ])) as Array<{ id: string }>;
     const userIds = users.map((u) => u.id);
     if (userIds.length > 0) {
       await ds.query(
@@ -180,7 +188,13 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
   it('falls back to a Postgres computation on cache miss, aggregating by muscle group and sorted desc', async () => {
     // bench-press -> chest/triceps/shoulders ; squat -> quads/glutes/hamstrings/core
     await seedWorkout(userId, week, WorkoutStatus.PARSED, [
-      { slug: 'bench-press', sets: [{ weight: 100, reps: 5 }, { weight: 100, reps: 5 }] }, // 1000
+      {
+        slug: 'bench-press',
+        sets: [
+          { weight: 100, reps: 5 },
+          { weight: 100, reps: 5 },
+        ],
+      }, // 1000
     ]);
     await seedWorkout(userId, week, WorkoutStatus.NEEDS_REVIEW, [
       { slug: 'squat', sets: [{ weight: 140, reps: 5 }] }, // 700
@@ -192,7 +206,9 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
     expect(res.status).toBe(200);
     expect(res.body.week).toBe(week);
 
-    const byGroup = Object.fromEntries((res.body.volumes as Volume[]).map((v) => [v.muscle_group, v.volume]));
+    const byGroup = Object.fromEntries(
+      (res.body.volumes as Volume[]).map((v) => [v.muscle_group, v.volume]),
+    );
     expect(byGroup.chest).toBe(1000);
     expect(byGroup.triceps).toBe(1000);
     expect(byGroup.shoulders).toBe(1000);
@@ -200,7 +216,9 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
     expect(byGroup.core).toBe(700);
 
     const volumes = res.body.volumes as Volume[];
-    expect(volumes.map((v) => v.volume)).toEqual([...volumes.map((v) => v.volume)].sort((a, b) => b - a));
+    expect(volumes.map((v) => v.volume)).toEqual(
+      [...volumes.map((v) => v.volume)].sort((a, b) => b - a),
+    );
   });
 
   it('reads the Redis hash when present, not Postgres', async () => {
@@ -220,7 +238,7 @@ describe('GET /analytics/weekly-volume (contract, per contracts/api.md)', () => 
     ]);
   });
 
-  it('is scoped to the caller — another user does not see this user\'s volume', async () => {
+  it("is scoped to the caller — another user does not see this user's volume", async () => {
     // `userId` has seeded workouts in `week` (test above); the `other` user has
     // none. A cross-user read must come back empty, not leak `userId`'s data.
     const res = await request(httpServer(app))

@@ -34,7 +34,10 @@ export interface RateLimitResult {
   allowed: boolean;
 }
 
-export async function checkRateLimit(client: Redis, config: RateLimitConfig): Promise<RateLimitResult> {
+export async function checkRateLimit(
+  client: Redis,
+  config: RateLimitConfig,
+): Promise<RateLimitResult> {
   const now = Date.now();
   const member = `${now}-${randomUUID()}`;
   const result = await client.eval(
@@ -56,6 +59,9 @@ export function ingestRateLimitKey(userId: string): string {
   return `ratelimit:ingest:${userId}`;
 }
 
-export async function checkIngestRateLimit(client: Redis, userId: string): Promise<RateLimitResult> {
+export async function checkIngestRateLimit(
+  client: Redis,
+  userId: string,
+): Promise<RateLimitResult> {
   return checkRateLimit(client, { key: ingestRateLimitKey(userId), ...INGEST_RATE_LIMIT });
 }

@@ -19,13 +19,12 @@ name: CI
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_call: {}
 
 jobs:
-   
   secret-scan:
     runs-on: ubuntu-latest
     # gitleaks-action calls the PR-commits API for pull_request events —
@@ -55,6 +54,43 @@ jobs:
           # PR here. GITHUB_TOKEN is auto-provided by Actions, no secret to
           # create.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Separate from compose-step on purpose: neither check needs the Docker stack
+  # nor a built packages/shared (verified by running both ESLint configs with
+  # its dist/ removed), so this runs in parallel and fails fast instead of
+  # waiting on four healthchecks.
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: 'package.json'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Two commands because there are two ESLint configs: the root one covers
+      # apps/api, apps/worker and packages/shared but explicitly ignores
+      # apps/web, which has its own (eslint-config-next brings its own base).
+      # A single `eslint .` from the root would silently skip the whole web
+      # app — the largest source tree in the repo.
+      - name: Lint
+        run: |
+          npm run lint
+          npm run lint --workspace=@workout-logging/web
+
+      # Turned on once the repo was actually formatted — it had 46 unformatted
+      # source files until then, so this step would have failed on every run.
+      # Build output (apps/web/out, dist/, .next/) is excluded in
+      # .prettierignore; without that this step's result would depend on
+      # whether the runner happened to have built the app.
+      - name: Check formatting
+        run: npm run format:check
 
   compose-step:
     runs-on: ubuntu-latest

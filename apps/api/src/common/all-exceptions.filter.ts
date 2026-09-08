@@ -15,7 +15,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const reply = http.getResponse<FastifyReply>();
     const req = http.getRequest<FastifyRequest & { userId?: string }>();
 
-    const status = exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+    const status =
+      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
 
     if (status >= 500) {
       logLine('api', 'error', 'unhandled exception', {

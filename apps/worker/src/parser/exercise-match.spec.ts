@@ -18,8 +18,12 @@ describe('normalizeExerciseName', () => {
     expect(normalizeExerciseName('dips')).toBe(normalizeExerciseName('dip'));
     expect(normalizeExerciseName('barbell rows')).toBe(normalizeExerciseName('row barbell'));
     expect(normalizeExerciseName('lateral raises')).toBe(normalizeExerciseName('lateral raise'));
-    expect(normalizeExerciseName('incline bench presses')).toBe(normalizeExerciseName('incline bench press'));
-    expect(normalizeExerciseName('triceps pushdown')).toBe(normalizeExerciseName('tricep pushdown'));
+    expect(normalizeExerciseName('incline bench presses')).toBe(
+      normalizeExerciseName('incline bench press'),
+    );
+    expect(normalizeExerciseName('triceps pushdown')).toBe(
+      normalizeExerciseName('tricep pushdown'),
+    );
   });
 
   it('does not strip the double-s of "press"', () => {
@@ -27,12 +31,16 @@ describe('normalizeExerciseName', () => {
   });
 
   it('collapses punctuation and casing', () => {
-    expect(normalizeExerciseName('Close-Grip Bench Press')).toBe(normalizeExerciseName('close grip bench press'));
+    expect(normalizeExerciseName('Close-Grip Bench Press')).toBe(
+      normalizeExerciseName('close grip bench press'),
+    );
   });
 
   it('does not collide distinct movements', () => {
     expect(normalizeExerciseName('barbell row')).not.toBe(normalizeExerciseName('dumbbell row'));
-    expect(normalizeExerciseName('incline bench press')).not.toBe(normalizeExerciseName('decline bench press'));
+    expect(normalizeExerciseName('incline bench press')).not.toBe(
+      normalizeExerciseName('decline bench press'),
+    );
     expect(normalizeExerciseName('front squat')).not.toBe(normalizeExerciseName('back squat'));
   });
 
@@ -43,7 +51,10 @@ describe('normalizeExerciseName', () => {
 
 describe('normalizedAliasesFor', () => {
   it('includes the canonical name and every alias, normalized and deduped', () => {
-    const keys = normalizedAliasesFor('Incline Dumbbell Press', ['incline db press', 'incline dumbbell bench press']);
+    const keys = normalizedAliasesFor('Incline Dumbbell Press', [
+      'incline db press',
+      'incline dumbbell bench press',
+    ]);
     expect(keys).toContain(normalizeExerciseName('Incline Dumbbell Press'));
     expect(keys).toContain(normalizeExerciseName('incline dumbbell bench press'));
     expect(new Set(keys).size).toBe(keys.length);

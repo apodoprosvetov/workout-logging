@@ -28,7 +28,9 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
   let otherAccessToken: string;
   let exerciseId: string;
 
-  async function registerAndGetToken(label: string): Promise<{ userId: string; accessToken: string }> {
+  async function registerAndGetToken(
+    label: string,
+  ): Promise<{ userId: string; accessToken: string }> {
     const email = emails.next(label);
     const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     const body = res.body as { access_token: string; user: { id: string } };
@@ -52,9 +54,13 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
           performedAtExplicit: true,
         }),
       );
-      const workoutExercise = await ds.getRepository(WorkoutExercise).save(
-        ds.getRepository(WorkoutExercise).create({ workoutId: workout.id, exerciseId, exerciseOrder: 1 }),
-      );
+      const workoutExercise = await ds
+        .getRepository(WorkoutExercise)
+        .save(
+          ds
+            .getRepository(WorkoutExercise)
+            .create({ workoutId: workout.id, exerciseId, exerciseOrder: 1 }),
+        );
       await ds.getRepository(WorkoutSet).save([
         ds.getRepository(WorkoutSet).create({
           workoutExerciseId: workoutExercise.id,
@@ -112,7 +118,9 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
     const exerciseRepository = ds.getRepository(Exercise);
     const exercise =
       (await exerciseRepository.findOneBy({ slug: 'bench-press' })) ??
-      (await exerciseRepository.save(exerciseRepository.create({ slug: 'bench-press', name: 'Bench Press' })));
+      (await exerciseRepository.save(
+        exerciseRepository.create({ slug: 'bench-press', name: 'Bench Press' }),
+      ));
     exerciseId = exercise.id;
     await ds.destroy();
   });
@@ -120,7 +128,9 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
   afterAll(async () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [emails.all()])) as Array<{
+    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [
+      emails.all(),
+    ])) as Array<{
       id: string;
     }>;
     const userIds = users.map((u) => u.id);
@@ -166,18 +176,33 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
       .delete(`/api/workouts/${workoutId}`)
       .set('authorization', `Bearer ${otherAccessToken}`);
     expect(res.status).toBe(404);
-    expect(await countRowsFor(workoutId)).toEqual({ workouts: 1, workoutExercises: 1, sets: 2, exercises: 1 });
+    expect(await countRowsFor(workoutId)).toEqual({
+      workouts: 1,
+      workoutExercises: 1,
+      sets: 2,
+      exercises: 1,
+    });
   });
 
   it('returns 204 and cascade-removes the workout, its exercises and sets (catalog untouched)', async () => {
     const workoutId = await seedWorkout(userId);
-    expect(await countRowsFor(workoutId)).toEqual({ workouts: 1, workoutExercises: 1, sets: 2, exercises: 1 });
+    expect(await countRowsFor(workoutId)).toEqual({
+      workouts: 1,
+      workoutExercises: 1,
+      sets: 2,
+      exercises: 1,
+    });
 
     const res = await request(httpServer(app))
       .delete(`/api/workouts/${workoutId}`)
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(204);
-    expect(await countRowsFor(workoutId)).toEqual({ workouts: 0, workoutExercises: 0, sets: 0, exercises: 1 });
+    expect(await countRowsFor(workoutId)).toEqual({
+      workouts: 0,
+      workoutExercises: 0,
+      sets: 0,
+      exercises: 1,
+    });
   });
 });

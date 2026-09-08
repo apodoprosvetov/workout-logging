@@ -8,7 +8,8 @@ describe('StructuredLogger (Nest LoggerService adapter)', () => {
 
   function capture(fn: () => void): Record<string, unknown>[] {
     const lines: Record<string, unknown>[] = [];
-    const push = (...a: unknown[]): void => void lines.push(JSON.parse(a[0] as string) as Record<string, unknown>);
+    const push = (...a: unknown[]): void =>
+      void lines.push(JSON.parse(a[0] as string) as Record<string, unknown>);
     vi.spyOn(console, 'log').mockImplementation(push);
     vi.spyOn(console, 'error').mockImplementation(push);
     fn();
@@ -16,7 +17,9 @@ describe('StructuredLogger (Nest LoggerService adapter)', () => {
   }
 
   it('maps log() to an info line and keeps the Nest context', () => {
-    const [line] = capture(() => logger.log('RabbitMQ publisher connected', 'RabbitMqPublisherService'));
+    const [line] = capture(() =>
+      logger.log('RabbitMQ publisher connected', 'RabbitMqPublisherService'),
+    );
     expect(line).toMatchObject({
       level: 'info',
       svc: 'api',

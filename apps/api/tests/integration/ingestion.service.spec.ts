@@ -47,9 +47,13 @@ describe('IngestionService (integration, real Postgres + MongoDB + RabbitMQ)', (
 
     // workouts.user_id is a real FK to users.id — needs an actual row, not a placeholder string.
     const ds = await createTypeOrmDataSource().initialize();
-    const user = await ds.getRepository(User).save(
-      ds.getRepository(User).create({ email: `ingestion-integration-${Date.now()}@example.com`, passwordHash: 'x' }),
-    );
+    const user = await ds
+      .getRepository(User)
+      .save(
+        ds
+          .getRepository(User)
+          .create({ email: `ingestion-integration-${Date.now()}@example.com`, passwordHash: 'x' }),
+      );
     userId = user.id;
     await ds.destroy();
 
@@ -79,14 +83,18 @@ describe('IngestionService (integration, real Postgres + MongoDB + RabbitMQ)', (
   });
 
   it('creates a pending workout row + a raw_uploads doc, and publishes workout.uploaded', async () => {
-    const result = await service.ingest({ userId, text: 'bench press 80kg x8', source: WorkoutSource.WEB });
+    const result = await service.ingest({
+      userId,
+      text: 'bench press 80kg x8',
+      source: WorkoutSource.WEB,
+    });
     expect(result.status).toBe(WorkoutStatus.PENDING);
 
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const [workoutRow] = (await ds.query('SELECT * FROM workouts WHERE id = $1', [result.workoutId])) as Array<
-      Record<string, unknown>
-    >;
+    const [workoutRow] = (await ds.query('SELECT * FROM workouts WHERE id = $1', [
+      result.workoutId,
+    ])) as Array<Record<string, unknown>>;
     await ds.destroy();
     expect(workoutRow.has_text).toBe(true);
     expect(workoutRow.has_image).toBe(false);

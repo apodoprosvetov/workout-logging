@@ -38,7 +38,12 @@ export class AnalyticsService {
     const volume: Record<string, number> =
       Object.keys(cached).length > 0
         ? Object.fromEntries(Object.entries(cached).map(([group, value]) => [group, Number(value)]))
-        : await computeWeeklyVolume(this.dataSource, this.mongoConnection, userId, isoWeekToDate(isoWeek));
+        : await computeWeeklyVolume(
+            this.dataSource,
+            this.mongoConnection,
+            userId,
+            isoWeekToDate(isoWeek),
+          );
 
     return {
       week: isoWeek,

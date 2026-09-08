@@ -68,7 +68,10 @@ export class AuthService {
       throw new UnauthorizedException('invalid email or password');
     }
 
-    const passwordMatches = await this.authTokensService.verifyPassword(user.passwordHash, password);
+    const passwordMatches = await this.authTokensService.verifyPassword(
+      user.passwordHash,
+      password,
+    );
     if (!passwordMatches) {
       throw new UnauthorizedException('invalid email or password');
     }
@@ -123,7 +126,9 @@ export class AuthService {
       await manager.query(`DELETE FROM users WHERE id = $1`, [userId]);
     });
 
-    const rawUploads = await this.rawUploadModel.find({ user_id: userId }, { image_refs: 1 }).lean();
+    const rawUploads = await this.rawUploadModel
+      .find({ user_id: userId }, { image_refs: 1 })
+      .lean();
     const imageRefs = rawUploads.flatMap((doc) => doc.image_refs ?? []);
     if (imageRefs.length > 0) {
       await deleteWorkoutImages(getWorkoutImagesBucket(this.mongoConnection), imageRefs);

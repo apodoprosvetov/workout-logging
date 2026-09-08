@@ -35,13 +35,15 @@ async function bootstrap(): Promise<void> {
   });
 
   // Adds prefix to all controllers
-  app.setGlobalPrefix('api'); 
+  app.setGlobalPrefix('api');
 
   // keyValues: text fields become plain values, files become Buffers, directly
   // on request.body — lets POST /workouts use a normal class-validator DTO.
   await app.register(multipart, { attachFieldsToBody: 'keyValues' });
 
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+  );
   app.useGlobalFilters(new AllExceptionsFilter());
   registerRequestLogging(app);
 

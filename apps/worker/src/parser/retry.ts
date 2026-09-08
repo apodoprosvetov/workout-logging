@@ -34,7 +34,10 @@ export async function markWorkoutFailed(dataSource: DataSource, workoutId: strin
     .createQueryBuilder()
     .update(Workout)
     .set({ status: WorkoutStatus.FAILED })
-    .where('id = :id AND status = :pendingStatus', { id: workoutId, pendingStatus: WorkoutStatus.PENDING })
+    .where('id = :id AND status = :pendingStatus', {
+      id: workoutId,
+      pendingStatus: WorkoutStatus.PENDING,
+    })
     .execute();
 }
 
@@ -88,7 +91,10 @@ export async function handleParseFailure(
         .model<RawUploadDocument>('RawUpload')
         .findById(event.raw_upload_ref);
       if (rawUpload && rawUpload.image_refs.length > 0) {
-        await deleteWorkoutImages(getWorkoutImagesBucket(context.mongoConnection), rawUpload.image_refs);
+        await deleteWorkoutImages(
+          getWorkoutImagesBucket(context.mongoConnection),
+          rawUpload.image_refs,
+        );
       }
     } catch (err) {
       log.error('failed to delete workout_images after DLQ', {

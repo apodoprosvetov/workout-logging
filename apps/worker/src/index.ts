@@ -16,7 +16,6 @@ import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
 import type { DataSource } from 'typeorm';
 
-
 export interface WorkerContext {
   dataSource: DataSource;
   mongoConnection: MongooseConnection;

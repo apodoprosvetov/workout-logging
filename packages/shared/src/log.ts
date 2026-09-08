@@ -20,7 +20,9 @@ export function logLine(svc: string, level: LogLevel, msg: string, fields: LogFi
   const line: Record<string, unknown> = { ts: new Date().toISOString(), level, svc, msg, ...rest };
   if (err !== undefined) {
     line.err =
-      err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err);
+      err instanceof Error
+        ? { name: err.name, message: err.message, stack: err.stack }
+        : String(err);
   }
   const serialised = safeStringify(line);
   if (level === 'warn' || level === 'error') console.error(serialised);
@@ -32,7 +34,12 @@ function safeStringify(value: unknown): string {
     return JSON.stringify(value);
   } catch {
     // A circular ref in a caller-supplied field shouldn't lose the log line.
-    return JSON.stringify({ ts: new Date().toISOString(), level: 'error', svc: 'log', msg: 'unserialisable log line' });
+    return JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      svc: 'log',
+      msg: 'unserialisable log line',
+    });
   }
 }
 

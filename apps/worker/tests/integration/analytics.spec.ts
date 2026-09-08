@@ -33,7 +33,6 @@ import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
 import type { DataSource } from 'typeorm';
 
-
 // 'bench-press' -> 'Bench Press' (the canonical exercise_catalog display name).
 function slugToName(slug: string): string {
   return slug
@@ -69,7 +68,11 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
 
     const user = await dataSource
       .getRepository(User)
-      .save(dataSource.getRepository(User).create({ email: `analytics-${Date.now()}@example.com`, passwordHash: 'x' }));
+      .save(
+        dataSource
+          .getRepository(User)
+          .create({ email: `analytics-${Date.now()}@example.com`, passwordHash: 'x' }),
+      );
     userId = user.id;
   });
 
@@ -99,7 +102,10 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     sets: Array<{ weight: number; reps: number }>;
   }
 
-  async function seedParsedWorkout(performedAt: string, exercises: SeedExercise[]): Promise<string> {
+  async function seedParsedWorkout(
+    performedAt: string,
+    exercises: SeedExercise[],
+  ): Promise<string> {
     const workout = await dataSource.getRepository(Workout).save(
       dataSource.getRepository(Workout).create({
         userId,
@@ -121,7 +127,9 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
       // of them asserts on `name` (workouts.get.spec.ts).
       const exercise =
         (await exerciseRepo.findOneBy({ slug: ex.slug })) ??
-        (await exerciseRepo.save(exerciseRepo.create({ slug: ex.slug, name: slugToName(ex.slug) })));
+        (await exerciseRepo.save(
+          exerciseRepo.create({ slug: ex.slug, name: slugToName(ex.slug) }),
+        ));
       const we = await dataSource.getRepository(WorkoutExercise).save(
         dataSource.getRepository(WorkoutExercise).create({
           workoutId: workout.id,
@@ -177,7 +185,13 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
   it('aggregates the ISO week into weekly_volume:{user}:{week}, full set volume per muscle group', async () => {
     // bench-press -> chest/triceps/shoulders ; squat -> quads/glutes/hamstrings/core
     const id = await seedParsedWorkout('2026-05-05T00:00:00.000Z', [
-      { slug: 'bench-press', sets: [{ weight: 100, reps: 5 }, { weight: 100, reps: 5 }] }, // 1000
+      {
+        slug: 'bench-press',
+        sets: [
+          { weight: 100, reps: 5 },
+          { weight: 100, reps: 5 },
+        ],
+      }, // 1000
       { slug: 'squat', sets: [{ weight: 120, reps: 5 }] }, // 600
     ]);
     publishParsed(id);
@@ -200,9 +214,14 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     ]);
     publishParsed(remove);
     await new Promise((r) => setTimeout(r, 800));
-    expect(Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).biceps)).toBeGreaterThanOrEqual(700);
+    expect(
+      Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).biceps),
+    ).toBeGreaterThanOrEqual(700);
 
-    await dataSource.query('DELETE FROM sets WHERE workout_exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id = $1)', [remove]);
+    await dataSource.query(
+      'DELETE FROM sets WHERE workout_exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id = $1)',
+      [remove],
+    );
     await dataSource.query('DELETE FROM workout_exercises WHERE workout_id = $1', [remove]);
     await dataSource.query('DELETE FROM workouts WHERE id = $1', [remove]);
 
@@ -210,7 +229,9 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     await new Promise((r) => setTimeout(r, 800));
     // Only `keep`'s 300 remains for these two workouts' curls (plus test 1's, which
     // didn't touch biceps). Assert the removed 400 is gone.
-    expect(Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).biceps)).toBeLessThan(700);
+    expect(Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).biceps)).toBeLessThan(
+      700,
+    );
   }, 15000);
 
   it('ignores sets whose exercise has no catalog entry', async () => {

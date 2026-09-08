@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Full 40-char commit SHA"
+        description: 'Full 40-char commit SHA'
         required: false
         type: string
         default: ''
@@ -117,7 +117,7 @@ jobs:
           cat > /tmp/deploy-script.sh <<'SCRIPT'
           set -euo pipefail
           export HOME=/root
-     
+
           export IMAGE_TAG="__IMAGE_TAG__"
           export ECR_API_REPOSITORY_URI="__ECR_API_REPOSITORY_URI__"
           export ECR_WORKER_REPOSITORY_URI="__ECR_WORKER_REPOSITORY_URI__"

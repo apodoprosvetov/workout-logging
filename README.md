@@ -3,11 +3,11 @@
 Log workouts from free-text / photos; a Telegram bot and a web UI on top of a
 NestJS API. npm-workspaces monorepo.
 
-| Workspace | What it is |
-|---|---|
-| `apps/api` | NestJS HTTP API (`/api/*`). Two replicas in production. |
-| `apps/worker` | Background consumer (RabbitMQ). No HTTP surface. |
-| `apps/web` | Next.js **static export** (`output: 'export'`) — no server, just files on S3. |
+| Workspace         | What it is                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api`        | NestJS HTTP API (`/api/*`). Two replicas in production.                                                                         |
+| `apps/worker`     | Background consumer (RabbitMQ). No HTTP surface.                                                                                |
+| `apps/web`        | Next.js **static export** (`output: 'export'`) — no server, just files on S3.                                                   |
 | `packages/shared` | TypeORM entities, Mongoose schemas, DB clients, migrations. Consumed as a built package (`dist/`), so build it before the apps. |
 
 ## Local development
@@ -93,13 +93,13 @@ Systems Manager Parameter Store as `SecureString` under `/workout-logging/*`, an
 `deploy.yml` resolves them into the environment on the instance just before
 `docker compose up` — never written to disk.
 
-| Parameter Store (`/workout-logging/…`) | Used by |
-|---|---|
-| `DATABASE_URL`, `MONGO_URL`, `RABBITMQ_URL` | api, worker connection strings |
-| `POSTGRES_PASSWORD`, `MONGO_PASSWORD`, `RABBITMQ_PASSWORD` | the datastore containers' root creds |
-| `JWT_SECRET` | api token signing |
-| `ANTHROPIC_API_KEY` | api + worker (text/image extraction) |
-| `DEPLOY_SSH_PRIVATE_KEY` | deploy.yml only — `git clone/fetch` on the instance |
+| Parameter Store (`/workout-logging/…`)                     | Used by                                             |
+| ---------------------------------------------------------- | --------------------------------------------------- |
+| `DATABASE_URL`, `MONGO_URL`, `RABBITMQ_URL`                | api, worker connection strings                      |
+| `POSTGRES_PASSWORD`, `MONGO_PASSWORD`, `RABBITMQ_PASSWORD` | the datastore containers' root creds                |
+| `JWT_SECRET`                                               | api token signing                                   |
+| `ANTHROPIC_API_KEY`                                        | api + worker (text/image extraction)                |
+| `DEPLOY_SSH_PRIVATE_KEY`                                   | deploy.yml only — `git clone/fetch` on the instance |
 
 Local dev uses `.env` (gitignored; template in `.env.example`) with the
 docker-compose.yml default credentials. `REDIS_URL` is hardcoded to

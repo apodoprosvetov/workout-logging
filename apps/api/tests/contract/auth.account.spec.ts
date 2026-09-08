@@ -68,7 +68,11 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
   async function seedAccount(label: string): Promise<SeededAccount> {
     const { userId, accessToken } = await register(label);
 
-    const imageRef = await uploadWorkoutImage(getWorkoutImagesBucket(mongo), TINY_PNG, `${label}.png`);
+    const imageRef = await uploadWorkoutImage(
+      getWorkoutImagesBucket(mongo),
+      TINY_PNG,
+      `${label}.png`,
+    );
     const rawUpload = await rawUploadModel.create({
       user_id: userId,
       text: 'bench press 80kg x8 x6',
@@ -93,12 +97,28 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
         }),
       );
       workoutId = workout.id;
-      const we = await ds.getRepository(WorkoutExercise).save(
-        ds.getRepository(WorkoutExercise).create({ workoutId: workout.id, exerciseId, exerciseOrder: 1 }),
-      );
+      const we = await ds
+        .getRepository(WorkoutExercise)
+        .save(
+          ds
+            .getRepository(WorkoutExercise)
+            .create({ workoutId: workout.id, exerciseId, exerciseOrder: 1 }),
+        );
       await ds.getRepository(WorkoutSet).save([
-        ds.getRepository(WorkoutSet).create({ workoutExerciseId: we.id, setOrder: 1, weight: '80', reps: 8, unit: SetUnit.KG }),
-        ds.getRepository(WorkoutSet).create({ workoutExerciseId: we.id, setOrder: 2, weight: '80', reps: 6, unit: SetUnit.KG }),
+        ds.getRepository(WorkoutSet).create({
+          workoutExerciseId: we.id,
+          setOrder: 1,
+          weight: '80',
+          reps: 8,
+          unit: SetUnit.KG,
+        }),
+        ds.getRepository(WorkoutSet).create({
+          workoutExerciseId: we.id,
+          setOrder: 2,
+          weight: '80',
+          reps: 6,
+          unit: SetUnit.KG,
+        }),
       ]);
     } finally {
       await ds.destroy();
@@ -110,7 +130,13 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
     return { userId, accessToken, workoutId, rawUploadId: rawUpload._id.toString(), imageRef };
   }
 
-  async function pgCounts(userId: string): Promise<{ users: number; refreshTokens: number; workouts: number; workoutExercises: number; sets: number }> {
+  async function pgCounts(userId: string): Promise<{
+    users: number;
+    refreshTokens: number;
+    workouts: number;
+    workoutExercises: number;
+    sets: number;
+  }> {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
     try {
@@ -150,7 +176,8 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
     await ds.initialize();
     const repo = ds.getRepository(Exercise);
     exerciseId = (
-      (await repo.findOneBy({ slug: 'bench-press' })) ?? (await repo.save(repo.create({ slug: 'bench-press', name: 'Bench Press' })))
+      (await repo.findOneBy({ slug: 'bench-press' })) ??
+      (await repo.save(repo.create({ slug: 'bench-press', name: 'Bench Press' })))
     ).id;
     await ds.destroy();
 
@@ -164,7 +191,9 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
     // this cleans up `other` and anything a failing test left behind.
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [emails.all()])) as Array<{ id: string }>;
+    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [
+      emails.all(),
+    ])) as Array<{ id: string }>;
     const ids = users.map((u) => u.id);
     if (ids.length > 0) {
       await ds.query(
@@ -172,7 +201,10 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
            (SELECT id FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE user_id = ANY($1)))`,
         [ids],
       );
-      await ds.query('DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE user_id = ANY($1))', [ids]);
+      await ds.query(
+        'DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE user_id = ANY($1))',
+        [ids],
+      );
       await ds.query('DELETE FROM workouts WHERE user_id = ANY($1)', [ids]);
       await ds.query('DELETE FROM refresh_tokens WHERE user_id = ANY($1)', [ids]);
       await ds.query('DELETE FROM users WHERE id = ANY($1)', [ids]);
@@ -199,12 +231,20 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
   });
 
   it('returns 401 with a malformed token', async () => {
-    const res = await request(httpServer(app)).delete('/api/auth/account').set('authorization', 'Bearer not.a.jwt');
+    const res = await request(httpServer(app))
+      .delete('/api/auth/account')
+      .set('authorization', 'Bearer not.a.jwt');
     expect(res.status).toBe(401);
   });
 
   it('204s and erases the account across Postgres, MongoDB and Redis (FR-021)', async () => {
-    expect(await pgCounts(mine.userId)).toEqual({ users: 1, refreshTokens: 1, workouts: 1, workoutExercises: 1, sets: 2 });
+    expect(await pgCounts(mine.userId)).toEqual({
+      users: 1,
+      refreshTokens: 1,
+      workouts: 1,
+      workoutExercises: 1,
+      sets: 2,
+    });
     expect(await imageExists(mine.imageRef)).toBe(true);
 
     const res = await request(httpServer(app))
@@ -212,7 +252,13 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
       .set('authorization', `Bearer ${mine.accessToken}`);
     expect(res.status).toBe(204);
 
-    expect(await pgCounts(mine.userId)).toEqual({ users: 0, refreshTokens: 0, workouts: 0, workoutExercises: 0, sets: 0 });
+    expect(await pgCounts(mine.userId)).toEqual({
+      users: 0,
+      refreshTokens: 0,
+      workouts: 0,
+      workoutExercises: 0,
+      sets: 0,
+    });
     expect(await rawUploadModel.countDocuments({ user_id: mine.userId })).toBe(0);
     expect(await imageExists(mine.imageRef)).toBe(false);
     expect(await redis.exists(ingestRateLimitKey(mine.userId))).toBe(0);
@@ -235,7 +281,13 @@ describe('DELETE /auth/account (contract, per contracts/api.md + data-model.md A
   });
 
   it("does not touch another user's data", async () => {
-    expect(await pgCounts(other.userId)).toEqual({ users: 1, refreshTokens: 1, workouts: 1, workoutExercises: 1, sets: 2 });
+    expect(await pgCounts(other.userId)).toEqual({
+      users: 1,
+      refreshTokens: 1,
+      workouts: 1,
+      workoutExercises: 1,
+      sets: 2,
+    });
     expect(await rawUploadModel.countDocuments({ user_id: other.userId })).toBe(1);
     expect(await imageExists(other.imageRef)).toBe(true);
     expect(await redis.exists(weeklyVolumeRedisKey(other.userId, WEEK))).toBe(1);

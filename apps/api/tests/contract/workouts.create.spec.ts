@@ -28,7 +28,9 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
   const emails = testEmailFactory('t030');
   const password = 'correct horse battery staple';
 
-  async function registerAndGetToken(label: string): Promise<{ email: string; accessToken: string }> {
+  async function registerAndGetToken(
+    label: string,
+  ): Promise<{ email: string; accessToken: string }> {
     const email = emails.next(label);
     const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     return { email, accessToken: (res.body as { access_token: string }).access_token };
@@ -41,7 +43,9 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
   afterAll(async () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [emails.all()])) as Array<{
+    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [
+      emails.all(),
+    ])) as Array<{
       id: string;
     }>;
     const userIds = users.map((u) => u.id);
@@ -56,7 +60,11 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
       const bucket = getWorkoutImagesBucket(mongoConn);
       for (const doc of rawUploads) {
         const imageRefs = (doc.get('image_refs') ?? []) as string[];
-        await Promise.all(imageRefs.map((id) => bucket.delete(new mongoose.mongo.ObjectId(id)).catch(() => undefined)));
+        await Promise.all(
+          imageRefs.map((id) =>
+            bucket.delete(new mongoose.mongo.ObjectId(id)).catch(() => undefined),
+          ),
+        );
       }
       await mongoConn.model('RawUpload').deleteMany({ user_id: { $in: userIds } });
       await mongoConn.close();
@@ -139,9 +147,9 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const [row] = (await ds.query('SELECT * FROM workouts WHERE id = $1', [res.body.workout_id])) as Array<
-      Record<string, unknown>
-    >;
+    const [row] = (await ds.query('SELECT * FROM workouts WHERE id = $1', [
+      res.body.workout_id,
+    ])) as Array<Record<string, unknown>>;
     await ds.destroy();
     expect(row.has_text).toBe(true);
     expect(row.status).toBe('pending');
@@ -173,9 +181,8 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
   it('the created workout is owned by the token subject, not anyone else (FR-015, T053)', async () => {
     const { accessToken } = await registerAndGetToken('ownercheck');
-    const sub = JSON.parse(
-      Buffer.from(accessToken.split('.')[1], 'base64url').toString(),
-    ).sub as string;
+    const sub = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url').toString())
+      .sub as string;
 
     const res = await request(httpServer(app))
       .post('/api/workouts')
@@ -185,7 +192,9 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const [row] = (await ds.query('SELECT user_id FROM workouts WHERE id = $1', [res.body.workout_id])) as Array<{
+    const [row] = (await ds.query('SELECT user_id FROM workouts WHERE id = $1', [
+      res.body.workout_id,
+    ])) as Array<{
       user_id: string;
     }>;
     await ds.destroy();
@@ -205,9 +214,10 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const [row] = (await ds.query('SELECT has_text, has_image, raw_input_ref FROM workouts WHERE id = $1', [
-      res.body.workout_id,
-    ])) as Array<{ has_text: boolean; has_image: boolean; raw_input_ref: string }>;
+    const [row] = (await ds.query(
+      'SELECT has_text, has_image, raw_input_ref FROM workouts WHERE id = $1',
+      [res.body.workout_id],
+    )) as Array<{ has_text: boolean; has_image: boolean; raw_input_ref: string }>;
     await ds.destroy();
     expect(row.has_text).toBe(false);
     expect(row.has_image).toBe(true);
@@ -229,7 +239,9 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
   it('rejects more than 10 images (MAX_WORKOUT_IMAGES cap, research.md #11)', async () => {
     const { accessToken } = await registerAndGetToken('toomanyimages');
-    let req = request(httpServer(app)).post('/api/workouts').set('authorization', `Bearer ${accessToken}`);
+    let req = request(httpServer(app))
+      .post('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`);
     for (let i = 0; i < 11; i++) {
       req = req.attach('images', TINY_PNG, `page${i}.png`);
     }
@@ -265,9 +277,10 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
 
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const [row] = (await ds.query('SELECT has_text, has_image, raw_input_ref FROM workouts WHERE id = $1', [
-      res.body.workout_id,
-    ])) as Array<{ has_text: boolean; has_image: boolean; raw_input_ref: string }>;
+    const [row] = (await ds.query(
+      'SELECT has_text, has_image, raw_input_ref FROM workouts WHERE id = $1',
+      [res.body.workout_id],
+    )) as Array<{ has_text: boolean; has_image: boolean; raw_input_ref: string }>;
     await ds.destroy();
     expect(row.has_text).toBe(true);
     expect(row.has_image).toBe(false);

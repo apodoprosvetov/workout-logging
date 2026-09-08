@@ -60,7 +60,9 @@ describe('POST /auth/refresh (contract, per contracts/api.md)', () => {
   });
 
   it('returns 401 for a syntactically-invalid refresh_token', async () => {
-    const res = await request(httpServer(app)).post('/api/auth/refresh').send({ refresh_token: 'not-a-real-token' });
+    const res = await request(httpServer(app))
+      .post('/api/auth/refresh')
+      .send({ refresh_token: 'not-a-real-token' });
 
     expect(res.status).toBe(401);
   });
@@ -91,7 +93,9 @@ describe('POST /auth/refresh (contract, per contracts/api.md)', () => {
     const { refresh_token } = await registerAndGetTokens('sub');
     const res = await request(httpServer(app)).post('/api/auth/refresh').send({ refresh_token });
 
-    const payload = JSON.parse(Buffer.from(res.body.access_token.split('.')[1], 'base64url').toString());
+    const payload = JSON.parse(
+      Buffer.from(res.body.access_token.split('.')[1], 'base64url').toString(),
+    );
     expect(typeof payload.sub).toBe('string');
   });
 });

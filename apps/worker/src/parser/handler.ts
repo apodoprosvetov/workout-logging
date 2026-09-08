@@ -61,7 +61,10 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
         exercise_count: outcome.result.exercise_count,
       });
     } else {
-      log.info('workout.uploaded redelivered, already processed', { workout_id: event.workout_id, event_id: event.event_id });
+      log.info('workout.uploaded redelivered, already processed', {
+        workout_id: event.workout_id,
+        event_id: event.event_id,
+      });
     }
     context.channel.ack(msg);
   } catch (err) {
@@ -134,7 +137,11 @@ async function processWorkout(
   let exerciseOrder = 0;
   for (const item of extracted.exercises) {
     exerciseOrder += 1;
-    const { exercise, matched } = await matchAndUpsertExercise(manager, context.mongoConnection, item.name);
+    const { exercise, matched } = await matchAndUpsertExercise(
+      manager,
+      context.mongoConnection,
+      item.name,
+    );
     if (!matched) allMatched = false;
 
     const workoutExercise = await workoutExerciseRepository.save(
@@ -164,7 +171,9 @@ async function processWorkout(
   // least one exercise didn't match the catalog (research.md #7 — muscle-group
   // attribution is incomplete, but the workout itself is not blocked/discarded).
   const status =
-    extracted.exercises.length === 0 || !allMatched ? WorkoutStatus.NEEDS_REVIEW : WorkoutStatus.PARSED;
+    extracted.exercises.length === 0 || !allMatched
+      ? WorkoutStatus.NEEDS_REVIEW
+      : WorkoutStatus.PARSED;
 
   // name: extracted from the text as literally written (e.g. "Низ А"), never
   // invented from the exercise list — still deferred beyond MVP (spec.md
@@ -182,7 +191,10 @@ async function processWorkout(
     .createQueryBuilder()
     .update(Workout)
     .set(updates)
-    .where('id = :id AND status = :pendingStatus', { id: event.workout_id, pendingStatus: WorkoutStatus.PENDING })
+    .where('id = :id AND status = :pendingStatus', {
+      id: event.workout_id,
+      pendingStatus: WorkoutStatus.PENDING,
+    })
     .execute();
 
   const parsedEvent: WorkoutParsedEvent = {
@@ -198,7 +210,10 @@ async function processWorkout(
   // Best-effort: a cleanup failure shouldn't fail/retry an already-succeeded parse.
   if (rawUpload.image_refs.length > 0) {
     try {
-      await deleteWorkoutImages(getWorkoutImagesBucket(context.mongoConnection), rawUpload.image_refs);
+      await deleteWorkoutImages(
+        getWorkoutImagesBucket(context.mongoConnection),
+        rawUpload.image_refs,
+      );
     } catch (err) {
       log.error('failed to delete workout_images after terminal status', {
         workout_id: event.workout_id,

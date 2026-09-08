@@ -2,7 +2,12 @@ import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createTypeOrmDataSource, Workout, WorkoutSource, WorkoutStatus } from '@workout-logging/shared';
+import {
+  createTypeOrmDataSource,
+  Workout,
+  WorkoutSource,
+  WorkoutStatus,
+} from '@workout-logging/shared';
 
 import { AuthModule } from '../../src/auth/auth.module';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
@@ -16,7 +21,9 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
   let userId: string;
   let otherUserId: string;
 
-  async function registerAndGetToken(label: string): Promise<{ userId: string; accessToken: string }> {
+  async function registerAndGetToken(
+    label: string,
+  ): Promise<{ userId: string; accessToken: string }> {
     const email = emails.next(label);
     const res = await request(httpServer(app)).post('/api/auth/register').send({ email, password });
     const body = res.body as { access_token: string; user: { id: string } };
@@ -56,7 +63,9 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
   afterAll(async () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
-    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [emails.all()])) as Array<{
+    const users = (await ds.query('SELECT id FROM users WHERE email = ANY($1)', [
+      emails.all(),
+    ])) as Array<{
       id: string;
     }>;
     const userIds = users.map((u) => u.id);
@@ -76,7 +85,9 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
   it('returns 401 for a tampered bearer token (signature check, T053)', async () => {
     const [h, p] = accessToken.split('.');
     const forged = `${h}.${p}.deadbeefdeadbeefdeadbeefdeadbeef`;
-    const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${forged}`);
+    const res = await request(httpServer(app))
+      .get('/api/workouts')
+      .set('authorization', `Bearer ${forged}`);
     expect(res.status).toBe(401);
   });
 
@@ -84,12 +95,18 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     const ds = createTypeOrmDataSource();
     await ds.initialize();
 
-    const older = await seedWorkout(ds, userId, { performedAt: new Date('2020-01-01T00:00:00.000Z') });
-    const newer = await seedWorkout(ds, userId, { performedAt: new Date('2020-01-02T00:00:00.000Z') });
+    const older = await seedWorkout(ds, userId, {
+      performedAt: new Date('2020-01-01T00:00:00.000Z'),
+    });
+    const newer = await seedWorkout(ds, userId, {
+      performedAt: new Date('2020-01-02T00:00:00.000Z'),
+    });
     const otherUsersWorkout = await seedWorkout(ds, otherUserId);
     await ds.destroy();
 
-    const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app))
+      .get('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     const ids = (res.body.data as Array<{ id: string }>).map((w) => w.id);
@@ -123,7 +140,9 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
   });
 
   it('returns the pagination envelope, defaulting to page 1 and per_page 20', async () => {
-    const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${accessToken}`);
+    const res = await request(httpServer(app))
+      .get('/api/workouts')
+      .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     const body = res.body as {
@@ -170,7 +189,11 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
         .get(`/api/workouts?page=${page}&per_page=2`)
         .set('authorization', `Bearer ${own.accessToken}`);
       expect(res.status).toBe(200);
-      const body = res.body as { data: Array<{ id: string }>; total: number; next_page: number | null };
+      const body = res.body as {
+        data: Array<{ id: string }>;
+        total: number;
+        next_page: number | null;
+      };
       expect(body.total).toBe(seeded.length);
       seen.push(...body.data.map((w) => w.id));
       page = body.next_page;
@@ -243,7 +266,9 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
 
     expect(res.status).toBe(200);
     const rows = res.body.data as Array<{ id: string; performed_at: string }>;
-    expect(rows.every((w) => new Date(w.performed_at).getTime() < beforeCursor.getTime())).toBe(true);
+    expect(rows.every((w) => new Date(w.performed_at).getTime() < beforeCursor.getTime())).toBe(
+      true,
+    );
     expect(rows.map((w) => w.id)).toContain(olderId);
     expect(rows.map((w) => w.id)).not.toContain(newerId);
   });
@@ -267,7 +292,9 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
 
     expect(res.status).toBe(200);
     const rows = res.body.data as Array<{ id: string; performed_at: string }>;
-    expect(rows.every((w) => new Date(w.performed_at).getTime() >= afterCursor.getTime())).toBe(true);
+    expect(rows.every((w) => new Date(w.performed_at).getTime() >= afterCursor.getTime())).toBe(
+      true,
+    );
     expect(rows.map((w) => w.id)).toEqual(expect.arrayContaining([onCursorId, afterCursorId]));
     expect(rows.map((w) => w.id)).not.toContain(beforeCursorId);
   });

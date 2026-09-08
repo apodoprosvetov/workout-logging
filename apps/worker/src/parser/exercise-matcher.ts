@@ -39,7 +39,9 @@ export async function matchAndUpsertExercise(
   const exerciseRepository = manager.getRepository(Exercise);
   let exercise = await exerciseRepository.findOneBy({ slug });
   if (!exercise) {
-    exercise = await exerciseRepository.save(exerciseRepository.create({ slug, name: canonicalName }));
+    exercise = await exerciseRepository.save(
+      exerciseRepository.create({ slug, name: canonicalName }),
+    );
   }
 
   return { exercise, matched: !!entry };

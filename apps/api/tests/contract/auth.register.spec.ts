@@ -35,7 +35,9 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
 
   it('returns 409 for an already-registered email', async () => {
     const email = emails.next('dup');
-    await request(httpServer(app)).post('/api/auth/register').send({ email, password: 'correct horse battery staple' });
+    await request(httpServer(app))
+      .post('/api/auth/register')
+      .send({ email, password: 'correct horse battery staple' });
 
     const res = await request(httpServer(app))
       .post('/api/auth/register')
@@ -86,7 +88,11 @@ describe('POST /auth/register (contract, per contracts/api.md)', () => {
   it('returns 400 for an unexpected extra field (forbidNonWhitelisted)', async () => {
     const res = await request(httpServer(app))
       .post('/api/auth/register')
-      .send({ email: emails.next('extra'), password: 'correct horse battery staple', isAdmin: true });
+      .send({
+        email: emails.next('extra'),
+        password: 'correct horse battery staple',
+        isAdmin: true,
+      });
 
     expect(res.status).toBe(400);
   });

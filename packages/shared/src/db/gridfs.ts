@@ -63,7 +63,10 @@ export async function downloadWorkoutImage(
 // Best-effort: called once a workout reaches a terminal status (parsed /
 // needs_review / failed-via-DLQ), never mid-retry. A ref already deleted
 // (e.g. a redelivered duplicate past withEventIdempotency) is not an error.
-export async function deleteWorkoutImages(bucket: InstanceType<typeof GridFSBucket>, imageRefs: string[]): Promise<void> {
+export async function deleteWorkoutImages(
+  bucket: InstanceType<typeof GridFSBucket>,
+  imageRefs: string[],
+): Promise<void> {
   await Promise.all(
     imageRefs.map(async (ref) => {
       try {

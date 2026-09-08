@@ -3,7 +3,8 @@ import { DataSource, EntityManager } from 'typeorm';
 import { ProcessedEvent } from '../entities';
 import { isUniqueViolation } from './pg-errors';
 
-export type IdempotentResult<T> = { alreadyProcessed: true } | { alreadyProcessed: false; result: T };
+export type IdempotentResult<T> =
+  { alreadyProcessed: true } | { alreadyProcessed: false; result: T };
 
 // Idempotent event processing (research.md #4): insert event_id first — a
 // conflict means this event was already handled, so `work` (and any non-

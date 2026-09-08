@@ -18,7 +18,12 @@ describe('worker structured logger', () => {
     const { out } = capture(() => log.info('worker started', { consumers: 2 }));
     expect(out).toHaveLength(1);
     const line = JSON.parse(out[0] as string) as Record<string, unknown>;
-    expect(line).toMatchObject({ level: 'info', svc: 'worker', msg: 'worker started', consumers: 2 });
+    expect(line).toMatchObject({
+      level: 'info',
+      svc: 'worker',
+      msg: 'worker started',
+      consumers: 2,
+    });
     expect(typeof line.ts).toBe('string');
     expect(new Date(line.ts as string).toISOString()).toBe(line.ts);
   });
@@ -35,8 +40,13 @@ describe('worker structured logger', () => {
   });
 
   it('expands an Error under `err` to {name, message, stack}', () => {
-    const { err } = capture(() => log.error('parse failed', { workout_id: 'w1', err: new TypeError('nope') }));
-    const line = JSON.parse(err[0] as string) as { workout_id: string; err: Record<string, unknown> };
+    const { err } = capture(() =>
+      log.error('parse failed', { workout_id: 'w1', err: new TypeError('nope') }),
+    );
+    const line = JSON.parse(err[0] as string) as {
+      workout_id: string;
+      err: Record<string, unknown>;
+    };
     expect(line.workout_id).toBe('w1');
     expect(line.err.name).toBe('TypeError');
     expect(line.err.message).toBe('nope');
