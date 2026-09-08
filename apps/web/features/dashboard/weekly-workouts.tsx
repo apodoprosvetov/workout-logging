@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { WorkoutTable } from '@components/workout-table';
 import { weekRangeForOffset } from '@lib/analytics';
 import { type WorkoutListResponse } from '@lib/workouts';
-import { useWorkoutLog } from '@services/workout-events';
+import { publishWorkoutDeleted, useWorkoutLog } from '@services/workout-events';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 
 // A week is a bounded window, so it is asked for whole rather than paged. The
@@ -65,15 +65,22 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
           : { ...current, data: current.data.filter((w) => w.id !== id), total: current.total - 1 },
       );
 
-      void deleteWorkout(id).catch(() => {
-        setData((current) => {
-          if (current === null) return current;
-          const restored = [...current.data];
-          restored.splice(index, 0, removed);
-          return { ...current, data: restored, total: current.total + 1 };
-        });
-        setError('Could not delete that workout. Please try again.');
-      });
+      void deleteWorkout(id).then(
+        // The volume chart is counting this workout and has no other way to
+        // hear about it (FR-004). Announcing also refetches this list, which is
+        // redundant but harmless — the server now agrees with what the row
+        // removal above already showed.
+        publishWorkoutDeleted,
+        () => {
+          setData((current) => {
+            if (current === null) return current;
+            const restored = [...current.data];
+            restored.splice(index, 0, removed);
+            return { ...current, data: restored, total: current.total + 1 };
+          });
+          setError('Could not delete that workout. Please try again.');
+        },
+      );
     },
     [data],
   );

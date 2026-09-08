@@ -21,28 +21,30 @@ import { useSyncExternalStore } from 'react';
 
 export interface WorkoutLogSnapshot {
   /**
-   * Increments once per successful POST /workouts. Consumers keep it in their
-   * effect dependencies and refetch when it changes (FR-011).
+   * Increments once per change to the workout log — a workout created, or one
+   * deleted. Consumers keep it in their effect dependencies and refetch when it
+   * changes (FR-011, FR-004).
    */
   readonly revision: number;
 
   /**
-   * Performed date of the workout just logged (ISO 8601), or null only in the
-   * initial snapshot — nothing has been logged in this tab yet.
+   * Where a newly created workout landed (ISO 8601), or null when the change
+   * was not a creation — a deletion, or the initial snapshot before anything
+   * has happened in this tab.
    *
-   * Always a real date after a publish. `POST /workouts` answers
-   * `{ workout_id, status }` and nothing more, so the producer supplies the
-   * date rather than reading it back: the form's own date field when the user
-   * set one, and otherwise today, because the API defaults an absent
-   * `performed_at` to the moment of the request
-   * (`ingestion.service.ts`: `input.performedAt ?? new Date()`). That is read
-   * off the contract, not guessed.
+   * Read from `POST /workouts`'s response, which returns the date it stored
+   * (contracts/api.md), rather than recomputed here: with the form's date field
+   * left blank the server picks the date, and a client that reimplemented that
+   * rule would be duplicating a decision that is the server's.
    *
-   * One limitation it cannot cover: when the date was *not* set explicitly,
-   * the parser worker may later move the workout to a date it found in the
-   * text (`performedAtExplicit` on the Workout entity). This snapshot still
-   * says where the workout landed at creation. Following it afterwards is the
-   * live-updates problem, deferred by FR-013.
+   * One limitation it cannot cover: when the date was *not* set explicitly, the
+   * parser worker may later move the workout to a date it found in the text
+   * (`performedAtExplicit` on the Workout entity). This says where the workout
+   * landed at creation. Following it afterwards is the live-updates problem,
+   * deferred by FR-013.
+   *
+   * Null is meaningful to consumers, not just absent: the dashboard uses it to
+   * decide whether to change week, and a deletion must never move the week.
    */
   readonly lastPerformedAt: string | null;
 }
@@ -86,7 +88,28 @@ function getServerSnapshot(): WorkoutLogSnapshot {
  * even when the user left the date blank.
  */
 export function publishWorkoutLogged(performedAt: string): void {
-  snapshot = Object.freeze({ revision: snapshot.revision + 1, lastPerformedAt: performedAt });
+  publish(performedAt);
+}
+
+/**
+ * Announce a successfully deleted workout.
+ *
+ * Call after DELETE /workouts/:id succeeds. The list that issued the delete has
+ * already removed the row optimistically — this is for everything *else* on
+ * screen, and the weekly volume chart in particular: without it the chart keeps
+ * counting a workout that no longer exists, and the two dashboard panels stop
+ * describing the same week (FR-004, spec.md Edge Cases).
+ *
+ * No date, deliberately. `lastPerformedAt` stays null so the dashboard's
+ * week-switching rule (FR-012) ignores a deletion — deleting a workout must
+ * refresh the week on screen, never navigate away from it.
+ */
+export function publishWorkoutDeleted(): void {
+  publish(null);
+}
+
+function publish(lastPerformedAt: string | null): void {
+  snapshot = Object.freeze({ revision: snapshot.revision + 1, lastPerformedAt });
   // Iterate a copy: a listener may unsubscribe (or a component may mount and
   // subscribe) while React processes the notification.
   for (const listener of [...listeners]) listener();

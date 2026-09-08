@@ -6,7 +6,7 @@ import { WorkoutTable } from '@components/workout-table';
 import { useRequireAuth } from '@hooks/use-require-auth';
 import { FIRST_PAGE } from '@lib/pagination';
 import { type WorkoutListResponse } from '@lib/workouts';
-import { useWorkoutLog } from '@services/workout-events';
+import { publishWorkoutDeleted, useWorkoutLog } from '@services/workout-events';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 
 const PER_PAGE = 20;
@@ -64,17 +64,23 @@ export function WorkoutList() {
           : { ...current, data: current.data.filter((w) => w.id !== id), total: current.total - 1 },
       );
 
-      void deleteWorkout(id).catch(() => {
-        setResult((current) => {
-          if (current === null) return current;
-          // splice back at the original position, not the end — the page is
-          // ordered by performed_at and appending would scramble it.
-          const restored = [...current.data];
-          restored.splice(index, 0, removed);
-          return { ...current, data: restored, total: current.total + 1 };
-        });
-        setError('Could not delete that workout. Please try again.');
-      });
+      void deleteWorkout(id).then(
+        // Refetching this page is the point, not a side effect: with one row
+        // gone the page is short by one, and the reload pulls the next
+        // workout up from the following page instead of leaving a gap.
+        publishWorkoutDeleted,
+        () => {
+          setResult((current) => {
+            if (current === null) return current;
+            // splice back at the original position, not the end — the page is
+            // ordered by performed_at and appending would scramble it.
+            const restored = [...current.data];
+            restored.splice(index, 0, removed);
+            return { ...current, data: restored, total: current.total + 1 };
+          });
+          setError('Could not delete that workout. Please try again.');
+        },
+      );
     },
     [result],
   );

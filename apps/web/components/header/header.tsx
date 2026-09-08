@@ -9,10 +9,20 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 import { LogWorkoutButton } from '@components/log-workout-button';
+import { useIsAuthenticated } from '@hooks/use-require-auth';
 import { logout } from '@services/auth';
 
-export function Header({ showLogout = true }: { showLogout?: boolean }) {
+// No `showLogout` prop any more. It used to be the (auth) layout's way of
+// hiding sign-out, which left the control showing wherever nobody remembered
+// to pass it — notably on "/", which lives in the (main) group and so rendered
+// a bare <Header />: a signed-out visitor was offered "Log out" for as long as
+// the redirect to /login took (FR-020, SC-006).
+//
+// Asking the session directly cannot be forgotten, and matches LogWorkoutButton,
+// which already gates itself the same way.
+export function Header() {
   const router = useRouter();
+  const authenticated = useIsAuthenticated();
 
   function handleLogout(): void {
     logout();
@@ -26,7 +36,7 @@ export function Header({ showLogout = true }: { showLogout?: boolean }) {
       </Link>
       <div className="flex items-center gap-4">
         <LogWorkoutButton />
-        {showLogout && (
+        {authenticated && (
           <button
             type="button"
             onClick={handleLogout}
