@@ -1,6 +1,7 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { HealthModule } from '../../src/health/health.module';
 import { createTestApp, httpServer } from '../helpers/test-app';
 

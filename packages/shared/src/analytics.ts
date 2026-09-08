@@ -1,6 +1,6 @@
+import type { ExerciseCatalogDocument } from './schemas';
 import type { Connection } from 'mongoose';
 import type { DataSource } from 'typeorm';
-import type { ExerciseCatalogDocument } from './schemas';
 
 // ISO 8601 week: weeks start Monday; week 1 is the one containing the year's
 // first Thursday. Computed in UTC — `workouts.performed_at` is a timestamptz and

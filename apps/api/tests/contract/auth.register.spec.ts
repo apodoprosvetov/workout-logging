@@ -1,7 +1,9 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { createTypeOrmDataSource } from '@workout-logging/shared';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { createTypeOrmDataSource } from '@workout-logging/shared';
+
 import { AuthModule } from '../../src/auth/auth.module';
 import { createTestApp, deleteTestUsers, httpServer, testEmailFactory } from '../helpers/test-app';
 

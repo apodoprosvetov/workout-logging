@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-import type { Channel } from 'amqplib';
 import {
   connectRabbitMq,
   createMongooseConnection,
@@ -7,12 +6,16 @@ import {
   createTypeOrmDataSource,
   setupRabbitMqTopology,
 } from '@workout-logging/shared';
-import type { Connection as MongooseConnection } from 'mongoose';
-import type { Redis } from 'ioredis';
-import type { DataSource } from 'typeorm';
-import { registerParserConsumer } from './parser/handler.js';
+
 import { registerAnalyticsConsumer } from './analytics/handler.js';
 import { log } from './logger.js';
+import { registerParserConsumer } from './parser/handler.js';
+
+import type { Channel } from 'amqplib';
+import type { Redis } from 'ioredis';
+import type { Connection as MongooseConnection } from 'mongoose';
+import type { DataSource } from 'typeorm';
+
 
 export interface WorkerContext {
   dataSource: DataSource;

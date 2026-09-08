@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { hasSession } from '@services/auth';
+import { useEffect } from 'react';
+
 import { useIsAuthenticated } from '@hooks/use-require-auth';
+import { hasSession } from '@services/auth';
 
 // No content of its own — just routes to /dashboard (authenticated) or
 // /login (not), based on whether a token is in localStorage (T025).

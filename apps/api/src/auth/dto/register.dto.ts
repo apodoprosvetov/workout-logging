@@ -1,4 +1,5 @@
 import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
+
 import { NormalizeEmail } from '../../common/normalize-email.decorator';
 
 export class RegisterDto {

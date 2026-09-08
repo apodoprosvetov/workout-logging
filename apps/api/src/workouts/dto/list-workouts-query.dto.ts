@@ -1,5 +1,7 @@
 import { IsEnum, IsISO8601, IsOptional } from 'class-validator';
+
 import { WorkoutStatus } from '@workout-logging/shared';
+
 import { PaginationQueryDto } from '../../common/pagination.dto';
 
 // Query params for GET /workouts (contracts/api.md):

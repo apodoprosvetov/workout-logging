@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
+
 import { ApiError } from '@services/api-client';
-import { createWorkout } from '@services/workouts';
 import { publishWorkoutLogged } from '@services/workout-events';
+import { createWorkout } from '@services/workouts';
 
 interface LogWorkoutFormProps {
   onLogged: () => void;

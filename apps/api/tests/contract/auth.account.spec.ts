@@ -1,4 +1,8 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
+import mongoose, { type Connection, type Model } from 'mongoose';
+import request from 'supertest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   createMongooseConnection,
   createRedisClient,
@@ -17,12 +21,11 @@ import {
   WorkoutSource,
   WorkoutStatus,
 } from '@workout-logging/shared';
-import mongoose, { type Connection, type Model } from 'mongoose';
-import type { Redis } from 'ioredis';
-import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { AuthModule } from '../../src/auth/auth.module';
 import { createTestApp, httpServer, testEmailFactory } from '../helpers/test-app';
+
+import type { Redis } from 'ioredis';
 
 // A real 1x1 PNG (same fixture the parser/ingestion suites use).
 const TINY_PNG = Buffer.from(

@@ -1,16 +1,19 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { InjectDataSource } from '@nestjs/typeorm';
+import { Connection } from 'mongoose';
+import { DataSource } from 'typeorm';
+
 import {
   computeWeeklyVolume,
   isoWeekKey,
   isoWeekToDate,
   weeklyVolumeRedisKey,
 } from '@workout-logging/shared';
-import type Redis from 'ioredis';
-import { Connection } from 'mongoose';
-import { DataSource } from 'typeorm';
+
 import { REDIS_CLIENT } from '../redis/redis.module';
+
+import type Redis from 'ioredis';
 
 export interface WeeklyVolumeResponse {
   week: string;

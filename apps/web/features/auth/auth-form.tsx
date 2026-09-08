@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+
 import { login, register, type AuthFailure } from '@services/auth';
 
 interface AuthFormProps {
@@ -105,7 +106,10 @@ export function AuthForm({ mode }: AuthFormProps) {
         </form>
         <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
           {copy.switchPrompt}{' '}
-          <Link href={copy.switchHref} className="font-medium text-zinc-950 underline dark:text-zinc-50">
+          <Link
+            href={copy.switchHref}
+            className="font-medium text-zinc-950 underline dark:text-zinc-50"
+          >
             {copy.switchLinkLabel}
           </Link>
         </p>

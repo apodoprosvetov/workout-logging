@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
-import { logLine } from '@workout-logging/shared';
 import { FastifyReply, FastifyRequest } from 'fastify';
+
+import { logLine } from '@workout-logging/shared';
 
 // HttpException (NotFoundException, UnauthorizedException, ...) pass through as
 // their declared status. Any 5xx — a thrown InternalServerErrorException or a

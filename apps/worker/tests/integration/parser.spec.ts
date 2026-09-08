@@ -1,5 +1,8 @@
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   connectRabbitMq,
   createMongooseConnection,
@@ -22,14 +25,16 @@ import {
   WORKOUT_PARSED_ROUTING_KEY,
   WORKOUT_UPLOADED_ROUTING_KEY,
 } from '@workout-logging/shared';
+
+import { registerParserConsumer } from '../../src/parser/handler.js';
+import { getRetryAttempt, handleParseFailure } from '../../src/parser/retry.js';
+
+import type { WorkerContext } from '../../src/index.js';
 import type { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
 import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
 import type { DataSource } from 'typeorm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { WorkerContext } from '../../src/index.js';
-import { registerParserConsumer } from '../../src/parser/handler.js';
-import { getRetryAttempt, handleParseFailure } from '../../src/parser/retry.js';
+
 
 // A real 1x1 PNG. Since T044 the parser sniffs each image's media type from its
 // magic bytes (image-media-type.ts) and rejects anything unrecognised into the

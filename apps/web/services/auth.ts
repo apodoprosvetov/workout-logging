@@ -43,7 +43,11 @@ export interface Credentials {
 // "wrong password" is an ordinary outcome to render, not an exception. Same
 // judgement as getWorkout returning null for 404 — the caller can act on the
 // result either way, so it is a value.
-async function authenticate(path: string, credentials: Credentials, rejectionFailure: AuthFailure): Promise<AuthResult> {
+async function authenticate(
+  path: string,
+  credentials: Credentials,
+  rejectionFailure: AuthFailure,
+): Promise<AuthResult> {
   let response: Response;
   try {
     response = await apiFetchPublic(path, {
@@ -59,7 +63,8 @@ async function authenticate(path: string, credentials: Credentials, rejectionFai
   if (!response.ok) {
     // 409 on register (email exists), 401 on login (bad credentials) — each
     // route has exactly one "understood you, and no" status.
-    if (response.status === 409 || response.status === 401) return { ok: false, failure: rejectionFailure };
+    if (response.status === 409 || response.status === 401)
+      return { ok: false, failure: rejectionFailure };
     if (response.status === 400) return { ok: false, failure: 'invalid_input' };
     return { ok: false, failure: 'unknown' };
   }

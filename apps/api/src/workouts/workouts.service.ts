@@ -1,7 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Workout } from '@workout-logging/shared';
 import { Repository } from 'typeorm';
+
+import { Workout } from '@workout-logging/shared';
+
 import { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
 import { paginate } from '../common/pagination';
 

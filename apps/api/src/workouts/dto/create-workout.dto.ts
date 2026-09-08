@@ -1,5 +1,6 @@
-import { ArrayMaxSize, IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { ArrayMaxSize, IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
+
 import { MAX_WORKOUT_IMAGES } from '@workout-logging/shared';
 
 // Multipart body (contracts/api.md): text?, images? (file[], max

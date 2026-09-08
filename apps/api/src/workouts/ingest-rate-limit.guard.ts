@@ -1,8 +1,11 @@
 import { CanActivate, ExecutionContext, HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
+
 import { checkIngestRateLimit } from '@workout-logging/shared';
-import type { Redis } from 'ioredis';
+
 import { AuthenticatedRequest } from '../auth/jwt-auth.guard';
 import { REDIS_CLIENT } from '../redis/redis.module';
+
+import type { Redis } from 'ioredis';
 
 // FR-018: ingestion rate-limited to 30 requests/minute/user. Must run after
 // JwtAuthGuard — needs request.userId already set.

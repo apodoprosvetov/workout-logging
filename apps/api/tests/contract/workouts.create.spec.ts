@@ -1,4 +1,8 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
+import mongoose from 'mongoose';
+import request from 'supertest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   connectRabbitMq,
   createMongooseConnection,
@@ -7,9 +11,7 @@ import {
   getWorkoutImagesBucket,
   WORKOUT_PARSE_QUEUE,
 } from '@workout-logging/shared';
-import mongoose from 'mongoose';
-import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { AuthModule } from '../../src/auth/auth.module';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
 import { createTestApp, deleteTestUsers, httpServer, testEmailFactory } from '../helpers/test-app';

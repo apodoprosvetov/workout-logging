@@ -2,9 +2,15 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { getWorkout } from '@services/workouts';
+
 import { useRequireAuth } from '@hooks/use-require-auth';
-import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutDetail as WorkoutDetailData } from '@lib/workouts';
+import {
+  formatPerformedAt,
+  statusBadgeClass,
+  statusLabel,
+  type WorkoutDetail as WorkoutDetailData,
+} from '@lib/workouts';
+import { getWorkout } from '@services/workouts';
 
 export function WorkoutDetail({ id }: { id: string }) {
   const ready = useRequireAuth();
@@ -45,7 +51,10 @@ export function WorkoutDetail({ id }: { id: string }) {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
-      <Link href="/workouts" className="text-sm font-medium text-zinc-600 underline dark:text-zinc-400">
+      <Link
+        href="/workouts"
+        className="text-sm font-medium text-zinc-600 underline dark:text-zinc-400"
+      >
         ← Back to workouts
       </Link>
 
@@ -65,18 +74,25 @@ export function WorkoutDetail({ id }: { id: string }) {
       {workout && (
         <div className="flex flex-col gap-6">
           <div className="flex items-center justify-between gap-4">
-            <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">{workout.name ?? 'Untitled workout'}</h1>
-            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${statusBadgeClass(workout.status)}`}>
+            <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
+              {workout.name ?? 'Untitled workout'}
+            </h1>
+            <span
+              className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${statusBadgeClass(workout.status)}`}
+            >
               {statusLabel(workout.status)}
             </span>
           </div>
           <p className="text-sm text-zinc-500">
-            {formatPerformedAt(workout.performed_at)} · {workout.source === 'telegram' ? 'Telegram' : 'Web'}
+            {formatPerformedAt(workout.performed_at)} ·{' '}
+            {workout.source === 'telegram' ? 'Telegram' : 'Web'}
           </p>
 
           {workout.exercises.length === 0 && (
             <p className="text-sm text-zinc-500">
-              {workout.status === 'pending' ? 'Still processing — check back shortly.' : 'No exercises were recognized.'}
+              {workout.status === 'pending'
+                ? 'Still processing — check back shortly.'
+                : 'No exercises were recognized.'}
             </p>
           )}
 
@@ -86,8 +102,13 @@ export function WorkoutDetail({ id }: { id: string }) {
                 .slice()
                 .sort((a, b) => a.order - b.order)
                 .map((exercise) => (
-                  <li key={exercise.order} className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-                    <h2 className="mb-2 font-medium text-black dark:text-zinc-50">{exercise.name}</h2>
+                  <li
+                    key={exercise.order}
+                    className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+                  >
+                    <h2 className="mb-2 font-medium text-black dark:text-zinc-50">
+                      {exercise.name}
+                    </h2>
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-zinc-500">

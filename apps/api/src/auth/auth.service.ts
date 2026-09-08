@@ -1,6 +1,9 @@
 import { ConflictException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { Connection, Model } from 'mongoose';
+import { DataSource, Repository } from 'typeorm';
+
 import {
   deleteWorkoutImages,
   getWorkoutImagesBucket,
@@ -11,11 +14,11 @@ import {
   User,
   weeklyVolumeRedisKeyPattern,
 } from '@workout-logging/shared';
-import type Redis from 'ioredis';
-import { Connection, Model } from 'mongoose';
-import { DataSource, Repository } from 'typeorm';
-import { REDIS_CLIENT } from '../redis/redis.module';
+
 import { AuthTokensService } from './auth-tokens.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
+
+import type Redis from 'ioredis';
 
 export interface AuthTokenResponse {
   access_token: string;

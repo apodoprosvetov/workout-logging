@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+
 import { useIsAuthenticated } from '@hooks/use-require-auth';
+
 import { LogWorkoutForm } from './log-workout-form';
 
 // Header trigger + modal host for LogWorkoutForm. Rendered in the header but

@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn } from 'typeorm';
+
 import { RefreshToken } from './refresh-token.entity';
 import { Workout } from './workout.entity';
 

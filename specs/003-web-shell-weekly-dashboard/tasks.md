@@ -163,7 +163,7 @@ than trusting this note.
 ## Phase 7: Polish & Cross-Cutting Concerns
 
 - [X] T039 [P] In `apps/web/features/workouts/workout-detail.tsx`, clear the previously loaded workout when `id` changes, so switching between workouts does not briefly show the previous one's data
-- [ ] T040 [P] Add a final newline to `apps/web/app/(main)/dashboard/page.tsx`, `apps/web/features/dashboard/dashboard.tsx`, and `apps/web/features/dashboard/weekly-workouts.tsx`, and convert their double-quoted imports to single quotes, matching the repository's `.editorconfig` and the surrounding files
+- [X] T040 [P] Add a final newline to `apps/web/app/(main)/dashboard/page.tsx`, `apps/web/features/dashboard/dashboard.tsx`, and `apps/web/features/dashboard/weekly-workouts.tsx`, and convert their double-quoted imports to single quotes, matching the repository's `.editorconfig` and the surrounding files
 - [ ] T041 Run the static checks from quickstart.md and confirm all three are clean and the build still prerenders all five routes: `npx tsc --noEmit -p apps/web/tsconfig.json`, `npm run lint --workspace=@workout-logging/web`, `npm run build --workspace=@workout-logging/web`
 - [ ] T042 Run `npm run test --workspaces --if-present` and confirm spec 001 and 002 behaviour is intact
 - [ ] T043 Walk every scenario in [quickstart.md](./quickstart.md) — Scenarios 3, 4 and 5 cover the requirements no automated test in this project reaches (research #10)

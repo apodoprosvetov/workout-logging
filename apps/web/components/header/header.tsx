@@ -7,8 +7,9 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { logout } from '@services/auth';
+
 import { LogWorkoutButton } from '@components/log-workout-button';
+import { logout } from '@services/auth';
 
 export function Header({ showLogout = true }: { showLogout?: boolean }) {
   const router = useRouter();

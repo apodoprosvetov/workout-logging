@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+
 import { Exercise, ExerciseCatalogDocument, normalizeExerciseName } from '@workout-logging/shared';
+
 import type { Connection } from 'mongoose';
 import type { EntityManager } from 'typeorm';
 

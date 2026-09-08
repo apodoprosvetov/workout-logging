@@ -1,5 +1,6 @@
-import { config as loadEnv } from 'dotenv';
 import path from 'node:path';
+
+import { config as loadEnv } from 'dotenv';
 import Redis from 'ioredis';
 
 // CLI convenience only — no-op once a real process (apps/api, apps/worker) has already loaded its own env.

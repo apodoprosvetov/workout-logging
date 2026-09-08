@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
 import { StructuredLogger } from './structured-logger';
 
 describe('StructuredLogger (Nest LoggerService adapter)', () => {

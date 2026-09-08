@@ -1,9 +1,12 @@
 import path from 'node:path';
+
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { mongoUri, typeOrmDataSourceOptions } from '@workout-logging/shared';
+
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';

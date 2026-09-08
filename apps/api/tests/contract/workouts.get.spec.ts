@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
+
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
+import request from 'supertest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   createTypeOrmDataSource,
   Exercise,
@@ -10,8 +14,7 @@ import {
   WorkoutSource,
   WorkoutStatus,
 } from '@workout-logging/shared';
-import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { AuthModule } from '../../src/auth/auth.module';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
 import { createTestApp, deleteTestUsers, httpServer, testEmailFactory } from '../helpers/test-app';

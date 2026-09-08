@@ -1,7 +1,8 @@
 import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+
+import { AnalyticsService } from './analytics.service';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { WeeklyVolumeQueryDto } from './dto/weekly-volume-query.dto';
-import { AnalyticsService } from './analytics.service';
 
 @Controller('analytics')
 @UseGuards(JwtAuthGuard)

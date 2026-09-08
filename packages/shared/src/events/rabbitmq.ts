@@ -1,6 +1,8 @@
-import { config as loadEnv } from 'dotenv';
 import path from 'node:path';
+
 import amqplib, { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
+import { config as loadEnv } from 'dotenv';
+
 import {
   WORKOUT_ANALYTICS_QUEUE,
   WORKOUT_DLQ,

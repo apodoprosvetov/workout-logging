@@ -1,9 +1,12 @@
 import 'reflect-metadata';
 import path from 'node:path';
+
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TestingModule, Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   connectRabbitMq,
   createMongooseConnection,
@@ -15,10 +18,11 @@ import {
   WorkoutStatus,
   WORKOUT_PARSE_QUEUE,
 } from '@workout-logging/shared';
-import type { Channel, ChannelModel } from 'amqplib';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import { IngestionService } from '../../src/workouts/ingestion.service';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
+
+import type { Channel, ChannelModel } from 'amqplib';
 
 describe('IngestionService (integration, real Postgres + MongoDB + RabbitMQ)', () => {
   let moduleRef: TestingModule;

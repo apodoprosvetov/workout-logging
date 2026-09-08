@@ -1,7 +1,8 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne, OneToMany, PrimaryColumn } from 'typeorm';
+
 import { Exercise } from './exercise.entity';
-import { Workout } from './workout.entity';
 import { WorkoutSet } from './set.entity';
+import { Workout } from './workout.entity';
 
 @Entity('workout_exercises')
 export class WorkoutExercise {

@@ -1,5 +1,8 @@
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
 import {
   connectRabbitMq,
   createMongooseConnection,
@@ -21,13 +24,15 @@ import {
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSED_ROUTING_KEY,
 } from '@workout-logging/shared';
+
+import { registerAnalyticsConsumer } from '../../src/analytics/handler.js';
+
+import type { WorkerContext } from '../../src/index.js';
 import type { Channel, ChannelModel } from 'amqplib';
 import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
 import type { DataSource } from 'typeorm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { WorkerContext } from '../../src/index.js';
-import { registerAnalyticsConsumer } from '../../src/analytics/handler.js';
+
 
 // 'bench-press' -> 'Bench Press' (the canonical exercise_catalog display name).
 function slugToName(slug: string): string {

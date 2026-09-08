@@ -3,12 +3,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { RawUploadSchema, RefreshToken, User } from '@workout-logging/shared';
-import { RedisModule } from '../redis/redis.module';
+
+import { AuthTokensService } from './auth-tokens.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { AuthTokensService } from './auth-tokens.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { RedisModule } from '../redis/redis.module';
 
 @Module({
   imports: [

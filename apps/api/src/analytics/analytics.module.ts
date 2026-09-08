@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+
 import { ExerciseCatalogSchema } from '@workout-logging/shared';
-import { AuthModule } from '../auth/auth.module';
-import { RedisModule } from '../redis/redis.module';
+
 import { AnalyticsController } from './analytics.controller';
 import { AnalyticsService } from './analytics.service';
+import { AuthModule } from '../auth/auth.module';
+import { RedisModule } from '../redis/redis.module';
 
 @Module({
   // TypeORM DataSource + Mongoose Connection come from the global core modules

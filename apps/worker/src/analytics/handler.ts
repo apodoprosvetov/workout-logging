@@ -9,9 +9,11 @@ import {
   WorkoutParsedEvent,
   WORKOUT_ANALYTICS_QUEUE,
 } from '@workout-logging/shared';
-import type { ConsumeMessage } from 'amqplib';
-import type { WorkerContext } from '../index.js';
+
 import { log } from '../logger.js';
+
+import type { WorkerContext } from '../index.js';
+import type { ConsumeMessage } from 'amqplib';
 
 // A week's cached volume is refreshed on every workout.parsed for that week, so
 // it never really goes stale — this TTL only evicts weeks that see no further

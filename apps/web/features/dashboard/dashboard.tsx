@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useRequireAuth } from '@hooks/use-require-auth';
-import { useWorkoutLog } from '@services/workout-events';
 import { formatDayMonth, weekRangeForOffset, weeksAgoForDate } from '@lib/analytics';
+import { useWorkoutLog } from '@services/workout-events';
+
 import { VolumeChart } from './volume-chart';
 import { WeeklyWorkouts } from './weekly-workouts';
 
@@ -35,7 +36,10 @@ export default function Dashboard() {
     // (FR-003), and one older than the window can only be reached at its edge.
     // Moving as far as we can still tells the user something happened; staying
     // put would look exactly like the bug this requirement exists to fix.
-    const target = Math.min(MAX_WEEKS_BACK, Math.max(0, weeksAgoForDate(new Date(lastPerformedAt))));
+    const target = Math.min(
+      MAX_WEEKS_BACK,
+      Math.max(0, weeksAgoForDate(new Date(lastPerformedAt))),
+    );
     // Setting state here rather than during render is deliberate: this reacts
     // to an external store changing, which is not information render has.
     // eslint-disable-next-line react-hooks/set-state-in-effect

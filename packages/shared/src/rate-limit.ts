@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import type { Redis } from 'ioredis';
 
 // Sliding-window log via a Redis sorted set: drop entries older than the

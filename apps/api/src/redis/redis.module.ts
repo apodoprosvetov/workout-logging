@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+
 import { createRedisClient } from '@workout-logging/shared';
 
 export const REDIS_CLIENT = Symbol('REDIS_CLIENT');

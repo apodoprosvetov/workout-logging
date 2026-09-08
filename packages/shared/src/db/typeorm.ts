@@ -1,8 +1,10 @@
 import 'reflect-metadata';
-import { config as loadEnv } from 'dotenv';
 import path from 'node:path';
+
+import { config as loadEnv } from 'dotenv';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
+
 import {
   Exercise,
   ProcessedEvent,

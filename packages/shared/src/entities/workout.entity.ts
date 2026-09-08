@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, OneToMany, PrimaryColumn } from 'typeorm';
+
 import { User } from './user.entity';
 import { WorkoutExercise } from './workout-exercise.entity';
 

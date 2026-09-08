@@ -11,10 +11,12 @@ import {
   WORKOUT_DLQ,
   WORKOUT_PARSE_QUEUE,
 } from '@workout-logging/shared';
+
+import { log } from '../logger.js';
+
+import type { WorkerContext } from '../index.js';
 import type { ConsumeMessage } from 'amqplib';
 import type { DataSource } from 'typeorm';
-import type { WorkerContext } from '../index.js';
-import { log } from '../logger.js';
 
 export { getRetryAttempt };
 

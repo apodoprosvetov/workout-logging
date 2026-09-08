@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Channel, ChannelModel } from 'amqplib';
+
 import { connectRabbitMq, setupRabbitMqTopology, WORKOUT_EVENTS_EXCHANGE } from '@workout-logging/shared';
 
 @Injectable()

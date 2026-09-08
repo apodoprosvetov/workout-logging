@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import path from 'node:path';
+
 import multipart from '@fastify/multipart';
 import { ModuleMetadata, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -7,7 +8,9 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { createTypeOrmDataSource, mongoUri, typeOrmDataSourceOptions } from '@workout-logging/shared';
+
 import { AllExceptionsFilter } from '../../src/common/all-exceptions.filter';
 
 // Shared harness for contract/integration tests: boots a real Nest+Fastify app

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { normalizeExerciseName, normalizedAliasesFor } from '@workout-logging/shared';
 
 // Pure — no infra, runs in CI (unlike parser.spec.ts).

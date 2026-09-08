@@ -1,6 +1,8 @@
-import { config as loadEnv } from 'dotenv';
 import path from 'node:path';
+
+import { config as loadEnv } from 'dotenv';
 import mongoose, { Connection } from 'mongoose';
+
 import { ExerciseCatalogSchema, RawUploadSchema } from '../schemas';
 
 // CLI convenience only — no-op once a real process (apps/api, apps/worker) has already loaded its own env.

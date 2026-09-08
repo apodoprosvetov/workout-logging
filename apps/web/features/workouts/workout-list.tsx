@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { deleteWorkout, listWorkouts } from '@services/workouts';
-import { useWorkoutLog } from '@services/workout-events';
-import { useRequireAuth } from '@hooks/use-require-auth';
-import { type WorkoutListResponse } from '@lib/workouts';
-import { FIRST_PAGE } from '@lib/pagination';
+
 import { WorkoutTable } from '@components/workout-table';
+import { useRequireAuth } from '@hooks/use-require-auth';
+import { FIRST_PAGE } from '@lib/pagination';
+import { type WorkoutListResponse } from '@lib/workouts';
+import { useWorkoutLog } from '@services/workout-events';
+import { deleteWorkout, listWorkouts } from '@services/workouts';
 
 const PER_PAGE = 20;
 

@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { FastifyRequest } from 'fastify';
+
 import { AuthTokensService } from './auth-tokens.service';
 
 export interface AuthenticatedRequest extends FastifyRequest {

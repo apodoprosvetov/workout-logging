@@ -1,4 +1,5 @@
 import { DataSource, EntityManager } from 'typeorm';
+
 import { ProcessedEvent } from '../entities';
 import { isUniqueViolation } from './pg-errors';
 

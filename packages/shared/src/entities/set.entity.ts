@@ -1,4 +1,5 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
+
 import { WorkoutExercise } from './workout-exercise.entity';
 
 export enum SetUnit {

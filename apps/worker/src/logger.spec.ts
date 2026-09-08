@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
 import { log } from './logger.js';
 
 describe('worker structured logger', () => {

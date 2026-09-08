@@ -1,14 +1,16 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
 import { RawUploadSchema, Workout } from '@workout-logging/shared';
-import { AuthModule } from '../auth/auth.module';
-import { EventsModule } from '../events/events.module';
-import { RedisModule } from '../redis/redis.module';
+
 import { IngestRateLimitGuard } from './ingest-rate-limit.guard';
 import { IngestionService } from './ingestion.service';
 import { WorkoutsController } from './workouts.controller';
 import { WorkoutsService } from './workouts.service';
+import { AuthModule } from '../auth/auth.module';
+import { EventsModule } from '../events/events.module';
+import { RedisModule } from '../redis/redis.module';
 
 @Module({
   imports: [

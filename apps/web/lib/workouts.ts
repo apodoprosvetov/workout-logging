@@ -66,13 +66,21 @@ export function statusBadgeClass(status: WorkoutStatus): string {
 }
 
 export function formatPerformedAt(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 // Compact form for list rows, e.g. "Mon, 6 Jun". en-GB pins the day-before-month
 // order regardless of the viewer's locale so the date column stays fixed-width.
 export function formatPerformedAtShort(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return new Date(iso).toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
 }
 
 // Shared column track for the workout list: date | name | status | delete.

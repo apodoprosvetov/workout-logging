@@ -24,7 +24,9 @@ export function WorkoutTable({
 }) {
   return (
     <div className="flex flex-col">
-      <div className={`${WORKOUT_ROW_GRID} px-1 pb-2 text-xs font-medium uppercase tracking-wide text-zinc-500`}>
+      <div
+        className={`${WORKOUT_ROW_GRID} px-1 pb-2 text-xs font-medium uppercase tracking-wide text-zinc-500`}
+      >
         <span>Date</span>
         <span>Workout</span>
         <span>Status</span>

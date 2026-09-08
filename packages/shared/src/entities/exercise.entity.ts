@@ -1,4 +1,5 @@
 import { Column, Entity, OneToMany, PrimaryColumn } from 'typeorm';
+
 import { WorkoutExercise } from './workout-exercise.entity';
 
 @Entity('exercises')

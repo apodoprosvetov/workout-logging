@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
+
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as argon2 from 'argon2';
-import { RefreshToken } from '@workout-logging/shared';
 import { Repository } from 'typeorm';
+
+import { RefreshToken } from '@workout-logging/shared';
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (research.md #6)
 

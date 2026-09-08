@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
+
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Connection, Model } from 'mongoose';
+import { Repository } from 'typeorm';
+
 import {
   getWorkoutImagesBucket,
   RawUploadDocument,
@@ -12,8 +16,7 @@ import {
   WorkoutUploadedEvent,
   WORKOUT_UPLOADED_ROUTING_KEY,
 } from '@workout-logging/shared';
-import { Connection, Model } from 'mongoose';
-import { Repository } from 'typeorm';
+
 import { RabbitMqPublisherService } from '../events/rabbitmq-publisher.service';
 
 export interface IngestInput {

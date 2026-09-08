@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { detectImageMediaType } from './image-media-type.js';
 
 // Pure magic-byte sniffing — no infra, runs in CI (unlike parser.spec.ts, which

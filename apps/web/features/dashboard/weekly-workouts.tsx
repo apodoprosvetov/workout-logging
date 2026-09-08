@@ -1,17 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { deleteWorkout, listWorkouts } from '@services/workouts';
-import { useWorkoutLog } from '@services/workout-events';
-import { type WorkoutListResponse } from '@lib/workouts';
-import { weekRangeForOffset } from '@lib/analytics';
+
 import { WorkoutTable } from '@components/workout-table';
+import { weekRangeForOffset } from '@lib/analytics';
+import { type WorkoutListResponse } from '@lib/workouts';
+import { useWorkoutLog } from '@services/workout-events';
+import { deleteWorkout, listWorkouts } from '@services/workouts';
 
 // A week is a bounded window, so it is asked for whole rather than paged. The
-// API applies its own DEFAULT_LIMIT of 20 when no limit is given, which would
-// silently drop a busy week's 21st workout (FR-007). 100 is the maximum the
-// endpoint accepts and is far above any real training week.
-const WEEK_LIMIT = 100;
+// API applies its own DEFAULT_PER_PAGE of 20 when none is given, which would
+// silently drop a busy week's 21st workout (FR-007). 100 is the maximum
+// `per_page` the contract accepts, and far above any real training week.
+const WEEK_PER_PAGE = 100;
 
 export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
   const [data, setData] = useState<WorkoutListResponse | null>(null);
@@ -35,7 +36,7 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
         await listWorkouts({
           after: monday.toISOString(),
           before: before.toISOString(),
-          per_page: WEEK_LIMIT,
+          per_page: WEEK_PER_PAGE,
         }),
       );
     } catch {
@@ -86,7 +87,11 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
       {error && (
         <div className="flex items-center justify-between rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           <span>{error}</span>
-          <button type="button" onClick={() => void load(weekRange.start, weekRange.end)} className="font-medium underline">
+          <button
+            type="button"
+            onClick={() => void load(weekRange.start, weekRange.end)}
+            className="font-medium underline"
+          >
             Retry
           </button>
         </div>

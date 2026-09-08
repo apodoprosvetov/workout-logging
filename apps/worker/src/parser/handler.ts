@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+
 import {
   deleteWorkoutImages,
   getWorkoutImagesBucket,
@@ -16,14 +17,16 @@ import {
   WORKOUT_PARSED_ROUTING_KEY,
   downloadWorkoutImage,
 } from '@workout-logging/shared';
-import type { ConsumeMessage } from 'amqplib';
-import type { EntityManager } from 'typeorm';
-import type { WorkerContext } from '../index.js';
+
 import { extractWorkout } from './claude.js';
 import { matchAndUpsertExercise } from './exercise-matcher.js';
-import { handleParseFailure, markWorkoutFailed, NonRetryableParseError } from './retry.js';
 import { detectImageMediaType, ImageMediaType } from './image-media-type.js';
+import { handleParseFailure, markWorkoutFailed, NonRetryableParseError } from './retry.js';
 import { log } from '../logger.js';
+
+import type { WorkerContext } from '../index.js';
+import type { ConsumeMessage } from 'amqplib';
+import type { EntityManager } from 'typeorm';
 
 export function registerParserConsumer(context: WorkerContext): void {
   void context.channel.consume(
