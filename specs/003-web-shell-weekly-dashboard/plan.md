@@ -18,8 +18,8 @@ Most of this is built. The plan's real work is the four gaps review found,
 each now a requirement: a logged workout must appear in the list on screen
 without a reload and pull the dashboard to its week (FR-011/FR-012, solved
 with a small external store — research #1); pagination must stop dropping
-rows that share a `performed_at` (FR-022, solved with a composite
-`(performed_at, id)` keyset cursor and a matching index — research #2/#3);
+rows that share a `performed_at` (FR-022, solved by making the ordering a
+total order and moving to shared page/per_page pagination — research #2/#3);
 the dead `tailwind.config.js` must go (FR-025 — research #6); and the
 duplicated workout-row markup must collapse to one component (FR-024 —
 research #8). Two structural corrections come with them: one root layout
@@ -46,12 +46,13 @@ on Fastify with TypeORM, unchanged.
 
 **Storage**: Postgres via TypeORM, unchanged schema except one index
 migration: `("user_id", "performed_at" DESC, "id" DESC)` replacing the
-existing `("user_id", "performed_at")`, so the composite keyset cursor seeks
-rather than filters (research #3). No new table, column, or entity.
+existing `("user_id", "performed_at")`, so the total ordering is satisfied by
+the index scan rather than a sort on top (research #3). No new table, column,
+or entity.
 
 **Testing**: Vitest + Supertest contract tests in
-`apps/api/tests/contract/workouts.list.spec.ts` for the new `before_id`
-parameter — the standing rule that every changed `apps/api` route is
+`apps/api/tests/contract/workouts.list.spec.ts` for the new pagination envelope
+and the total ordering — the standing rule that every changed `apps/api` route is
 contract-tested. `apps/web` gets no test framework in this feature; it is
 verified by `tsc --noEmit`, `eslint`, `next build`, and the manual scenarios
 in [quickstart.md](./quickstart.md) (research #10, with the accepted risk
@@ -67,8 +68,8 @@ and never touches a datastore directly (spec 001's plan.md).
 
 **Performance Goals**: A week view issues exactly two requests (volume,
 workouts) and must not re-request on unrelated re-renders. Pagination stays
-one index scan per page regardless of history depth — the reason for keyset
-over `OFFSET` (research #2).
+cheap at this project's scale; correctness comes from the total ordering, not
+from the cursor scheme (research #2).
 
 **Constraints**: Static export — no server components doing data fetching, no
 server actions, no middleware; every data read is a client fetch carrying a
@@ -94,7 +95,7 @@ and confirmed in this session. They are applied here as the working gates:
 
 | De facto rule | Source | This feature |
 | --- | --- | --- |
-| Every new or changed `apps/api` route has contract tests | project rule, applied to `after` in the working tree | PASS — `before_id` gets contract tests (research #10) |
+| Every new or changed `apps/api` route has contract tests | project rule, applied to `after` in the working tree | PASS — the envelope and ordering get contract tests (research #10) |
 | `apps/web` speaks only HTTP to `apps/api`, never to a datastore | spec 001 plan.md | PASS — no change to that boundary |
 | `apps/web` cannot import `@workout-logging/shared` (CommonJS barrel pulls in mongoose/pg/ioredis) | `lib/analytics.ts` | PASS — `isoWeekKey` stays mirrored client-side, as today |
 | Contract changes are written into `contracts/api.md` | spec 001 | PASS — see [contracts/api-delta.md](./contracts/api-delta.md) |
@@ -112,7 +113,7 @@ swap. Complexity Tracking below is therefore empty.
 specs/003-web-shell-weekly-dashboard/
 ├── plan.md              # This file
 ├── spec.md              # Feature specification
-├── research.md          # Phase 0 output — 10 decisions
+├── research.md          # Phase 0 output — 11 decisions
 ├── data-model.md        # Phase 1 output
 ├── quickstart.md        # Phase 1 output — validation scenarios
 ├── contracts/
@@ -153,18 +154,22 @@ apps/web/
 │   └── use-require-auth.ts     # MOVED from services/ (FR-026)
 ├── services/
 │   ├── api-client.ts
+│   ├── workouts.ts             # NEW: getWorkout / listWorkouts / deleteWorkout
 │   └── workout-events.ts       # NEW: the logged-workout store (FR-011/FR-012)
 ├── lib/
 │   ├── analytics.ts            # week math, mirrors packages/shared's isoWeekKey
+│   ├── pagination.ts           # NEW: Paginated<T>, mirrors the API envelope
 │   └── workouts.ts             # contract types, formatters, status labels
 ├── tailwind.config.js          # DELETED (FR-025)
 └── tsconfig.json               # CHANGED: aliases, all resolving to real directories
 
 apps/api/
 ├── src/workouts/
-│   ├── dto/list-workouts-query.dto.ts   # CHANGED: before_id
-│   └── workouts.service.ts              # CHANGED: row-value keyset comparison
-└── tests/contract/workouts.list.spec.ts # CHANGED: before_id contract tests
+│   ├── dto/list-workouts-query.dto.ts   # CHANGED: extends PaginationQueryDto
+│   └── workouts.service.ts              # CHANGED: total ordering + paginate()
+├── src/common/pagination.dto.ts         # NEW: page / per_page base DTO
+├── src/common/pagination.ts             # NEW: paginate() + Paginated<T>
+└── tests/contract/workouts.list.spec.ts # CHANGED: envelope + ordering tests
 
 packages/shared/
 ├── src/entities/workout.entity.ts       # CHANGED: @Index carries id

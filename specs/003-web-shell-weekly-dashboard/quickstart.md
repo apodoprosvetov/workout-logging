@@ -127,7 +127,7 @@ gone when the modal is reopened (FR-010).
 
 ## Scenario 5 — Pagination keeps every row (FR-022, User Story 4)
 
-The duplicate-`performed_at` case, which is the whole point of `before_id`.
+The duplicate-`performed_at` case — what made the old cursor lose rows.
 
 ```bash
 # 25 workouts, all on the same date — more than one page, all colliding
@@ -146,9 +146,21 @@ you see.
 not — the page boundary falls inside the collision and the rows behind it
 vanish.
 
+The header count must read `25 workouts`, and it must agree with what paging
+actually yields — the count comes from the API's `total`, so a mismatch means
+the ordering or the filters disagree between the page query and its count.
+
 Then page back: each earlier page shows the same rows it showed on the way
 forward (User Story 4, scenario 3). The back control is disabled on page 1,
 the forward control on the last page (FR-023).
+
+Also confirm the retired parameter is refused rather than ignored:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  'localhost:3000/api/workouts?limit=5'          # → 400
+```
 
 The API half of this is covered by contract tests:
 
@@ -162,7 +174,7 @@ With the 25 same-day workouts from scenario 5 still present, open the
 dashboard on the week containing 2026-03-02.
 
 **Expected**: all 25 are listed. Exactly 20 would mean the request fell back
-to the API's default limit (research #4).
+to the API's default `per_page` (research #4).
 
 ## Scenario 7 — Shell and navigation (FR-015 – FR-020, User Story 3)
 

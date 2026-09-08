@@ -3,8 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Workout } from '@workout-logging/shared';
 import { Repository } from 'typeorm';
 import { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
-
-const DEFAULT_LIMIT = 20;
+import { paginate } from '../common/pagination';
 
 // Read/CRUD side of workouts (list/get today; room for delete, patch, and a
 // manual/non-AI-ingested create later) — kept separate from IngestionService,
@@ -22,28 +21,34 @@ export class WorkoutsService {
   // `before` (exclusive) / `after` (inclusive) bound performedAt as a
   // half-open [after, before) window — pass both to fetch a single ISO
   // week (after = week start, before = next week start).
+  //
+  // The sort carries `id` as a tie-break because performedAt alone is not a
+  // total order, and ties are the normal case here rather than a rarity: the
+  // web form supplies a date, so every workout logged for the same day shares
+  // performedAt to the microsecond. Verified against Postgres 16 — the same
+  // three tied rows come back A,B,C under a sequential scan and C,B,A under an
+  // index scan, so without a tie-break the order flips with the query plan.
+  // Offset pagination on top of that would silently skip and repeat rows
+  // between pages, so the tie-break is load-bearing, not tidiness.
   async list(userId: string, query: ListWorkoutsQueryDto) {
     const qb = this.workoutRepository
       .createQueryBuilder('w')
       .where('w.userId = :userId', { userId })
       .orderBy('w.performedAt', 'DESC')
-      .limit(query.limit ?? DEFAULT_LIMIT);
+      .addOrderBy('w.id', 'DESC');
 
     if (query.status) qb.andWhere('w.status = :status', { status: query.status });
     if (query.before) qb.andWhere('w.performedAt < :before', { before: new Date(query.before) });
     if (query.after) qb.andWhere('w.performedAt >= :after', { after: new Date(query.after) });
 
-    const workouts = await qb.getMany();
-    return {
-      workouts: workouts.map((w) => ({
-        id: w.id,
-        name: w.name,
-        source: w.source,
-        status: w.status,
-        performed_at: w.performedAt.toISOString(),
-        created_at: w.createdAt.toISOString(),
-      })),
-    };
+    return paginate(qb, query, (w) => ({
+      id: w.id,
+      name: w.name,
+      source: w.source,
+      status: w.status,
+      performed_at: w.performedAt.toISOString(),
+      created_at: w.createdAt.toISOString(),
+    }));
   }
 
   // 404, not 403, for another user's workout or a nonexistent one — never

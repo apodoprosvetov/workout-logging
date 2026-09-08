@@ -3,36 +3,28 @@
 import { useCallback, useEffect, useState } from 'react';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 import { useRequireAuth } from '@hooks/use-require-auth';
-import { type WorkoutListItem } from '@lib/workouts';
+import { type WorkoutListResponse } from '@lib/workouts';
+import { FIRST_PAGE } from '@lib/pagination';
 import { WorkoutTable } from '@components/workout-table';
 
-const PAGE_SIZE = 20;
+const PER_PAGE = 20;
 
 export function WorkoutList() {
   const ready = useRequireAuth();
 
-  // GET /workouts paginates by `performed_at` desc behind an exclusive `before`
-  // cursor (contracts/api.md) — there is no offset or page number. We keep a
-  // stack of the `before` value used for each page: cursorStack[0] is undefined
-  // (page 1, newest first) and "Older" pushes the last visible row's
-  // performed_at; "Newer" pops back.
-  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
-  const [workouts, setWorkouts] = useState<WorkoutListItem[] | null>(null);
-  const [hasNext, setHasNext] = useState(false);
+  // GET /workouts paginates by page number and answers in the standard envelope
+  // (contracts/api.md), so the whole page position is one integer and "is there
+  // more?" is `next_page !== null` — no cursor stack, and no over-fetching an
+  // extra row to guess at it.
+  const [page, setPage] = useState(FIRST_PAGE);
+  const [result, setResult] = useState<WorkoutListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const cursor = cursorStack[cursorStack.length - 1];
-  const pageIndex = cursorStack.length - 1;
-
-  const load = useCallback(async (before: string | undefined) => {
+  const load = useCallback(async (forPage: number) => {
     setError(null);
-    setWorkouts(null);
+    setResult(null);
     try {
-      // Over-fetch by one row: the API returns no total or has-more flag, so a
-      // full extra row is how we know another page exists.
-      const data = await listWorkouts({ limit: PAGE_SIZE + 1, before });
-      setHasNext(data.workouts.length > PAGE_SIZE);
-      setWorkouts(data.workouts.slice(0, PAGE_SIZE));
+      setResult(await listWorkouts({ page: forPage, per_page: PER_PAGE }));
     } catch {
       setError('Could not load your workouts. Please try again.');
     }
@@ -42,86 +34,90 @@ export function WorkoutList() {
     // React's documented fetch-in-effect pattern (no data lib in this project) —
     // same as workout-detail.tsx / weekly-workouts.tsx.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (ready) void load(cursor);
-  }, [ready, cursor, load]);
+    if (ready) void load(page);
+  }, [ready, page, load]);
 
   // Optimistic: the row goes immediately and comes back if the request fails.
   // That is what keeps WorkoutTable stateless — with no in-flight window there
   // is no "deleting" state for it to hold, so its onDelete can be `=> void`.
   //
-  // Index and item are captured here in render scope, before setWorkouts: a
-  // state updater must be pure, and StrictMode calls it twice.
+  // Index and item are captured here in render scope, before setResult: a state
+  // updater must be pure, and StrictMode calls it twice. `total` moves with the
+  // row so the "N workouts" count does not lie while the request is in flight.
   const remove = useCallback(
     (id: string) => {
-      if (workouts === null) return;
-      const index = workouts.findIndex((w) => w.id === id);
+      if (result === null) return;
+      const index = result.data.findIndex((w) => w.id === id);
       if (index === -1) return;
-      const removed = workouts[index];
+      const removed = result.data[index];
 
-      setWorkouts((current) => current?.filter((w) => w.id !== id) ?? current);
+      setResult((current) =>
+        current === null
+          ? current
+          : { ...current, data: current.data.filter((w) => w.id !== id), total: current.total - 1 },
+      );
 
       void deleteWorkout(id).catch(() => {
-        setWorkouts((current) => {
+        setResult((current) => {
           if (current === null) return current;
           // splice back at the original position, not the end — the page is
           // ordered by performed_at and appending would scramble it.
-          const restored = [...current];
+          const restored = [...current.data];
           restored.splice(index, 0, removed);
-          return restored;
+          return { ...current, data: restored, total: current.total + 1 };
         });
         setError('Could not delete that workout. Please try again.');
       });
     },
-    [workouts],
+    [result],
   );
 
   if (!ready) return null;
 
-  const goOlder = () => {
-    const last = workouts?.[workouts.length - 1];
-    if (last) setCursorStack((s) => [...s, last.performed_at]);
-  };
-  const goNewer = () => setCursorStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
-
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-10">
-      <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">Workouts</h1>
+      <div className="flex items-baseline justify-between">
+        <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">Workouts</h1>
+        {result !== null && (
+          <span className="text-sm tabular-nums text-zinc-500">
+            {result.total} {result.total === 1 ? 'workout' : 'workouts'}
+          </span>
+        )}
+      </div>
 
       {error && (
         <div className="flex items-center justify-between rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           <span>{error}</span>
-          <button type="button" onClick={() => void load(cursor)} className="font-medium underline">
+          <button type="button" onClick={() => void load(page)} className="font-medium underline">
             Retry
           </button>
         </div>
       )}
 
-      {!error && workouts === null && <p className="text-sm text-zinc-500">Loading…</p>}
+      {!error && result === null && <p className="text-sm text-zinc-500">Loading…</p>}
 
-      {!error && workouts !== null && workouts.length === 0 && (
-        <p className="text-sm text-zinc-500">
-          {pageIndex === 0 ? 'No workouts logged yet.' : 'No more workouts on this page.'}
-        </p>
+      {!error && result !== null && result.data.length === 0 && (
+        <p className="text-sm text-zinc-500">No workouts logged yet.</p>
       )}
 
-      {!error && workouts !== null && workouts.length > 0 && (
-        <WorkoutTable workouts={workouts} onDelete={remove} />
+      {!error && result !== null && result.data.length > 0 && (
+        <WorkoutTable workouts={result.data} onDelete={remove} />
       )}
 
       <div className="flex items-center justify-between pt-2">
         <button
           type="button"
-          onClick={goNewer}
-          disabled={pageIndex === 0 || workouts === null}
+          onClick={() => result?.prev_page !== null && setPage(result?.prev_page ?? FIRST_PAGE)}
+          disabled={result === null || result.prev_page === null}
           className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
         >
           ← Newer
         </button>
-        <span className="text-xs tabular-nums text-zinc-500">Page {pageIndex + 1}</span>
+        <span className="text-xs tabular-nums text-zinc-500">Page {page}</span>
         <button
           type="button"
-          onClick={goOlder}
-          disabled={!hasNext || workouts === null}
+          onClick={() => result?.next_page != null && setPage(result.next_page)}
+          disabled={result === null || result.next_page === null}
           className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
         >
           Older →

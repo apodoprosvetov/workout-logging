@@ -1,3 +1,5 @@
+import type { Paginated } from './pagination';
+
 // Types mirror contracts/api.md's GET /workouts and GET /workouts/:id
 // response shapes exactly — apps/web only knows the HTTP contract, not
 // apps/api's internal TypeORM entities (plan.md: apps/web never touches the
@@ -16,9 +18,8 @@ export interface WorkoutListItem {
   created_at: string;
 }
 
-export interface WorkoutListResponse {
-  workouts: WorkoutListItem[];
-}
+/** `GET /workouts` — a page of list rows in the standard envelope. */
+export type WorkoutListResponse = Paginated<WorkoutListItem>;
 
 export interface WorkoutSetItem {
   order: number;

@@ -2,7 +2,7 @@
 
 **Feature**: 003-web-shell-weekly-dashboard | **Date**: 2026-09-08
 
-Ten decisions. Most of this feature already exists in the working tree, so
+Eleven decisions. Most of this feature already exists in the working tree, so
 several entries record *why the existing shape stays* as much as what to
 build; where the review found a gap, the entry says what replaces it.
 
@@ -49,52 +49,72 @@ threaded through props.
 
 ## 2. Pagination that cannot skip rows (FR-022)
 
-**Decision**: Composite keyset cursor. `GET /workouts` gains an optional
-`before_id`, valid only together with `before`, and the filter becomes a
-row-value comparison:
+**Revised 2026-09-08.** This entry originally specified a composite keyset
+cursor (`before_id`). It was replaced by page/per_page offset pagination in a
+shared envelope after the failure was reproduced and the two options compared
+on real data. The keyset design is recorded under Alternatives below.
 
-```sql
-WHERE (w.performed_at, w.id) < (:before, :before_id)
-```
+**Decision**, in two parts:
 
-The client sends the last visible row's `performed_at` **and** its `id`.
-Ordering becomes `performed_at DESC, id DESC` so the comparison and the sort
-agree.
+1. **The ordering becomes a total order**: `ORDER BY performed_at DESC, id DESC`.
+2. **Pagination becomes offset-based and shared**: every list endpoint takes
+   `page` (default 1) and `per_page` (default 20, max 100) and answers in one
+   envelope — `{ data, total, page, per_page, next_page, prev_page }`. `limit`
+   is retired.
 
-**Rationale**: The current cursor is `performed_at` alone with a strict `<`.
-Rows sharing a `performed_at` that straddle a page boundary are silently
-dropped — and they are not rare: the logging form uses a date input, so
-`performed_at` is midnight, and two workouts on one day collide exactly.
-Silent loss in a training log is the worst failure mode available here,
-because the user cannot detect it.
+**Rationale**: The original cursor was `performed_at` alone with a strict `<`.
+Reproduced against Postgres 16 on the real schema: with 22 workouts of which
+three share `2026-02-10T00:00:00Z`, page 1 (`limit=21`) ends inside the tie
+group, the client sends that row's `performed_at` as the cursor, and page 2
+(`performed_at < 2026-02-10`) returns **zero rows** — two workouts become
+unreachable from the UI entirely. Not a corner case: the logging form uses a
+date input, so `performed_at` is midnight and same-day workouts collide
+exactly.
 
-A row-value comparison is a single indexable predicate in Postgres, so this
-stays one index scan. `id` is a UUID, so its order is arbitrary — irrelevant
-for a tie-break, which only needs to be *stable* and *total*.
+Part 1 is the real fix and is required by *either* pagination scheme. Measured
+on the same data: the same three tied rows come back `A,B,C` under a
+sequential scan and `C,B,A` under an index scan. `ORDER BY performed_at DESC`
+is not a total order, so tied rows have no defined position — and paginating
+over an undefined position is unsound however the cursor is expressed.
+
+Part 2 is then a genuinely free choice, and offset wins on this project's
+terms: page position is one integer instead of a cursor stack, `total` becomes
+available (the client's over-fetch-by-one hack to guess "is there more"
+disappears), and one envelope serves every future list endpoint. Its known
+weakness — pages shifting when rows are inserted or deleted mid-browse — costs
+a single-user log with a few hundred workouts almost nothing, and its
+`offset + limit` scan cost is immaterial at that size.
 
 **Alternatives considered**:
 
+- **Composite keyset cursor (`before_id`)**, the original decision:
+  `WHERE (performed_at, id) < (:before, :before_id)`. Strictly more correct —
+  immune to shifting, constant cost at any depth. Rejected as
+  disproportionate: it needs a cursor pair threaded through the client, a
+  cross-field validation rule, and it still would not have worked without
+  part 1. Revisit if the history ever grows into the tens of thousands or
+  gains concurrent writers.
 - **Client-side dedup by id, fetching with overlap.** No API change, but it
   makes "has another page" unreliable and leaks pagination correctness into
   every consumer.
-- **`OFFSET`/`LIMIT`.** Simple and correct against duplicates, but shifts
-  under concurrent inserts and scans more rows per page as history grows.
-  Keyset is already the established pattern here (contracts/api.md).
 - **Tie-break on `created_at`.** Not unique in principle; `id` is.
+- **`nestjs-paginate` / `nestjs-typeorm-paginate`** — see decision #11.
 
 ---
 
-## 3. Index for the composite cursor
+## 3. Index for the total ordering
 
 **Decision**: Replace `IDX_e6a14b328d153b3050dd0773af` — currently
 `("user_id", "performed_at")` — with `("user_id", "performed_at" DESC, "id" DESC)`,
 in a new migration.
 
 **Rationale**: The existing index was added for exactly this read path
-(`AddIndexesForWorkoutReadPaths`). Extending it to carry the tie-break
-column in matching sort order lets the row-value comparison in decision 2
-seek directly instead of filtering after the fact. This is the only schema
-change in the feature.
+(`AddIndexesForWorkoutReadPaths`). Now that the ordering ends in `id`
+(decision 2, part 1), the two-column index no longer satisfies the sort on its
+own and Postgres has to add a sort step on top. Carrying the tie-break column
+in matching order removes it. This is the only schema change in the feature,
+and it is needed whichever pagination scheme is used — it follows from the
+ordering, not from the cursor.
 
 **Alternatives considered**: Adding a second index and leaving the first —
 rejected; the new one is a strict superset for this query, and an unused
@@ -104,15 +124,19 @@ index still costs write time.
 
 ## 4. A week's list must not truncate (FR-007)
 
-**Decision**: The dashboard's weekly list requests an explicit `limit` of
-100 (the DTO's documented maximum) rather than relying on the API default.
+**Decision**: The dashboard's weekly list requests an explicit `per_page` of
+100 (the contract's maximum) rather than relying on the API default.
 
-**Rationale**: `WorkoutsService` applies `DEFAULT_LIMIT = 20` when no limit
-is given. A bounded week query silently losing its 21st workout is the same
-class of invisible failure as decision 2. 100 is far above any real week and
+**Rationale**: A list endpoint applies `DEFAULT_PER_PAGE = 20` when none is
+given. A bounded week query silently losing its 21st workout is the same class
+of invisible failure as decision 2. 100 is far above any real training week and
 already the contract's ceiling, so no contract change is needed.
 
-**Alternatives considered**: Making `limit` unbounded when both `after` and
+A week is deliberately fetched whole rather than paged: it is a bounded window
+the user reviews as one thing, and paging inside it would answer a question
+nobody asks.
+
+**Alternatives considered**: Making `per_page` unbounded when both `after` and
 `before` are present — rejected, it makes the endpoint's worst case depend
 on the caller's window rather than a fixed cap.
 
@@ -238,3 +262,45 @@ larger decision than this feature should make on the way past.
 **Risk accepted**: FR-011, FR-012 and FR-022's client half are verified by
 hand. They are written as explicit quickstart scenarios so the check is
 repeatable rather than remembered.
+
+---
+
+## 11. Build the pagination helper rather than take a dependency
+
+**Added 2026-09-08**, alongside decision #2's revision.
+
+**Decision**: A small shared helper in `apps/api/src/common/` —
+`PaginationQueryDto` (a base class list DTOs extend) plus a `paginate()`
+function that applies skip/take, runs `getManyAndCount()`, and returns the
+envelope. No new dependency.
+
+**Rationale**: NestJS ships no pagination of its own, so the question was
+whether to adopt one of the two established packages. Neither fits:
+
+- **`nestjs-paginate@15`** declares a peer of `typeorm: ^1.0.0`; this project
+  is on 0.3.20. Version 13.5.1 does support `typeorm ^0.3.17`, but both
+  majors also peer-depend on `@nestjs/swagger`, which this project does not
+  use and would be pulling in solely to satisfy a resolver. More importantly
+  it *owns the query syntax* (`?sortBy=performedAt:DESC&filter.status=$eq:parsed`),
+  which would replace the hand-written DTO and the deliberate `after`/`before`
+  window semantics this feature depends on. Its envelope is `{data, meta, links}`.
+- **`nestjs-typeorm-paginate@4.1.0`** matches the version matrix exactly, but
+  does not parse query params at all — the caller passes `{page, limit}` — so
+  it contributes only the count, the arithmetic and an `{items, meta, links}`
+  envelope. About fifteen lines, in a shape we would then have to translate.
+
+Both would have to be fought to produce the agreed envelope. The helper as
+built is around forty lines and owns exactly the behaviour the contract
+promises.
+
+**Also decided here**: a base DTO class rather than a `@Pagination()` param
+decorator. `main.ts` installs a global
+`ValidationPipe({ whitelist, forbidNonWhitelisted, transform })`, so an
+inherited DTO is already coerced and validated, and `limit` now returns 400
+for free. A custom decorator would run outside that pipe and have to
+reimplement all of it.
+
+**Scope note**: `GET /workouts` is currently the only list endpoint —
+`GET /analytics/weekly-volume` returns a single week's aggregate, not a list.
+The abstraction therefore generalises from one case, and was deliberately kept
+thin for that reason; the second list endpoint gets to reshape it.

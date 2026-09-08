@@ -30,7 +30,7 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
         await listWorkouts({
           after: monday.toISOString(),
           before: before.toISOString(),
-          limit: WEEK_LIMIT,
+          per_page: WEEK_LIMIT,
         }),
       );
     } catch {
@@ -49,20 +49,22 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
   const remove = useCallback(
     (id: string) => {
       if (data === null) return;
-      const index = data.workouts.findIndex((w) => w.id === id);
+      const index = data.data.findIndex((w) => w.id === id);
       if (index === -1) return;
-      const removed = data.workouts[index];
+      const removed = data.data[index];
 
       setData((current) =>
-        current === null ? current : { workouts: current.workouts.filter((w) => w.id !== id) },
+        current === null
+          ? current
+          : { ...current, data: current.data.filter((w) => w.id !== id), total: current.total - 1 },
       );
 
       void deleteWorkout(id).catch(() => {
         setData((current) => {
           if (current === null) return current;
-          const restored = [...current.workouts];
+          const restored = [...current.data];
           restored.splice(index, 0, removed);
-          return { workouts: restored };
+          return { ...current, data: restored, total: current.total + 1 };
         });
         setError('Could not delete that workout. Please try again.');
       });
@@ -87,12 +89,12 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
 
       {!error && data === null && <p className="text-sm text-zinc-500">Loading…</p>}
 
-      {!error && data !== null && data.workouts.length === 0 && (
+      {!error && data !== null && data.data.length === 0 && (
         <p className="text-sm text-zinc-500">No workouts logged for this week.</p>
       )}
 
-      {!error && data !== null && data.workouts.length > 0 && (
-        <WorkoutTable workouts={data.workouts} onDelete={remove} />
+      {!error && data !== null && data.data.length > 0 && (
+        <WorkoutTable workouts={data.data} onDelete={remove} />
       )}
     </section>
   );

@@ -1,101 +1,121 @@
 # API Contract Delta: Web Shell & Weekly Dashboard
 
 **Feature**: 003-web-shell-weekly-dashboard | **Date**: 2026-09-08
+**Revised**: 2026-09-08 — keyset `before_id` replaced by shared offset
+pagination (research #2, #11)
 
 A delta against the authoritative contract,
 [`specs/001-workout-logging-mvp/contracts/api.md`](../../001-workout-logging-mvp/contracts/api.md).
-Only `GET /workouts` changes. On implementation, these changes are folded
-into that file — it stays the single source of truth; this document records
-what moved and why.
+These changes are folded into that file on implementation — it stays the single
+source of truth; this document records what moved and why.
 
-## `GET /workouts`
+## New: pagination, shared by every list endpoint
 
-Auth required. Scoped to the caller (FR-015 of spec 001). Sorted and
-paginated by `performed_at` descending — not `created_at`, so a backlogged
-entry sorts by when it happened.
+**Breaking.** `limit` is retired. A caller still sending it gets **400** —
+`main.ts`'s `ValidationPipe` runs with `forbidNonWhitelisted`, so a retired
+parameter is reported rather than ignored.
 
-### Query parameters
+### Request
 
-| Parameter | Type | Status | Meaning |
+| Parameter | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `status` | enum | unchanged | filter by processing status |
-| `limit` | integer 1–100 | unchanged | page size; defaults to 20 when absent |
-| `before` | ISO 8601 | **semantics extended** | upper bound on `performed_at`, exclusive |
-| `after` | ISO 8601 | **already added** (working tree) | lower bound on `performed_at`, inclusive |
-| `before_id` | UUID | **new in this feature** | tie-break companion to `before` |
+| `page` | integer ≥ 1 | 1 | below 1 or non-integer → 400 |
+| `per_page` | integer 1–100 | 20 | outside the range → 400 |
 
-### `after` — half-open windows
-
-`after` (inclusive) with `before` (exclusive) bound `performed_at` as a
-half-open `[after, before)` window. Passing both fetches exactly one week:
-`after` = the week's Monday 00:00 UTC, `before` = the next Monday 00:00 UTC.
-
-This parameter already exists in the working tree with contract tests
-covering the lower bound, the combined week window, and a 400 on a malformed
-value. It is listed here because it is part of this feature's story, not
-because it is outstanding work.
-
-### `before_id` — pagination that cannot skip rows
-
-**Problem it solves.** With `before` alone the cursor is a strict `<` on
-`performed_at`. Workouts sharing a `performed_at` that straddle a page
-boundary are dropped silently. Not a corner case: the logging form uses a
-date input, so `performed_at` is midnight, and two workouts on one day
-collide exactly (FR-022, research #2).
-
-**Behaviour.** When `before_id` is supplied, the filter is a row-value
-comparison over the pair, and the sort carries the same tie-break:
-
-```
-WHERE (performed_at, id) < (:before, :before_id)
-ORDER BY performed_at DESC, id DESC
-```
-
-**Rules.**
-
-- `before_id` is optional.
-- `before_id` MUST be accompanied by `before`. Supplying `before_id` alone
-  is a client error → **400**.
-- `before` without `before_id` keeps its existing meaning exactly — a plain
-  exclusive bound on `performed_at`. Existing callers are unaffected.
-- A malformed `before_id` (not a UUID) → **400**.
-- `before_id` need not identify an existing workout; it is a sort position,
-  not a lookup. An unknown UUID returns whatever sorts after that position.
-
-**Ordering change.** The response order becomes `performed_at DESC, id DESC`
-for every caller, not only those passing `before_id`. Previously ties were
-returned in unspecified order. This is a tightening, not a break: any order
-that was valid before is still a valid subset, and the cursor now has a
-stable position to resume from.
-
-**Client usage.** To page forward, send the last visible row's
-`performed_at` as `before` and its `id` as `before_id`.
+Capped at 100 so no single request can ask the database for an unbounded scan.
+100 is also exactly what the dashboard's whole-week query needs, so the cap
+constrains no real caller.
 
 ### Response
 
-Unchanged: `{ workouts: [{ id, name, source, status, performed_at, created_at }] }`
+```json
+{
+  "data": [ ... ],
+  "total": 137,
+  "page": 2,
+  "per_page": 20,
+  "next_page": 3,
+  "prev_page": 1
+}
+```
 
-No total and no has-more flag — callers that need to know whether another
-page exists over-fetch by one row, as `/workouts` does today.
+- `total` — rows matching the filters across all pages, from the same
+  `getManyAndCount()` that fetches the page.
+- `next_page` / `prev_page` — page numbers, `null` at the ends. Derivable from
+  the other three; present so a client pages by null-check instead of by
+  arithmetic it has to get right.
+- snake_case throughout, matching the bodies the API already returns
+  (`performed_at`, `access_token`, `workout_id`).
+
+A page past the end returns `data: []` with `next_page: null` — an empty page,
+not a 404.
+
+### Ordering requirement
+
+**Any list endpoint's `ORDER BY` must end in a unique column.** Offset
+pagination over a non-total ordering silently skips and repeats rows between
+pages, because the database is free to order tied rows differently for each
+page's query. This is a contract-level rule, not an implementation note.
+
+## `GET /workouts`
+
+Auth required. Scoped to the caller (spec 001 FR-015).
+
+### Ordering — changed
+
+`performed_at DESC, id DESC`. Previously `performed_at DESC` alone, with ties
+in unspecified order.
+
+The `id` tie-break is load-bearing, not tidiness. Reproduced against
+Postgres 16 on the real schema: three workouts sharing one `performed_at` come
+back `A,B,C` under a sequential scan and `C,B,A` under an index scan. And ties
+are ordinary here — the logging form uses a date input, so `performed_at` is
+midnight and every workout logged for one day collides exactly.
+
+This is what the retired `before_id` design was for; the total order solves it
+for offset pagination too, and for any scheme adopted later.
+
+### Query parameters
+
+| Parameter | Status | Meaning |
+| --- | --- | --- |
+| `status` | unchanged | filter by processing status |
+| `before` | unchanged | upper bound on `performed_at`, exclusive |
+| `after` | unchanged | lower bound on `performed_at`, inclusive |
+| `page`, `per_page` | **new** | pagination, as above |
+| `limit` | **removed** | → 400 |
+
+`before` and `after` remain **filters, not pagination**: together they bound
+`performed_at` as a half-open `[after, before)` window. Passing both fetches
+exactly one week — `after` = the week's Monday 00:00 UTC, `before` = the next
+Monday 00:00 UTC. The dashboard pairs them with `per_page=100` to take a week
+whole.
+
+### Response
+
+The standard envelope, with
+`data: [{ id, name, source, status, performed_at, created_at }]`.
+
+Previously `{ workouts: [...] }`. Callers no longer over-fetch one extra row to
+guess whether another page exists — that is `next_page !== null`.
 
 ### Contract tests
 
-In `apps/api/tests/contract/workouts.list.spec.ts`, matching the file's
-existing style:
+In `apps/api/tests/contract/workouts.list.spec.ts`:
 
-1. Given several workouts sharing one `performed_at` and a page boundary
-   falling among them, paging with `(before, before_id)` returns every
-   workout exactly once across pages — none skipped, none repeated.
-2. `before_id` without `before` → 400.
-3. A malformed `before_id` → 400.
-4. `before` alone still behaves as a plain exclusive bound (regression guard
-   for existing callers).
+1. Tied `performed_at` rows come back in `id DESC` order, and the same order on
+   a repeated request — guards the total ordering directly.
+2. Paging with `per_page=2` over 7 workouts, 5 of which share one
+   `performed_at`, visits every row exactly once — the scenario that made two
+   rows unreachable under the old cursor.
+3. The envelope's defaults are `page: 1`, `per_page: 20`, with `prev_page: null`.
+4. A page past the end returns `data: []` and `next_page: null`, status 200.
+5. `per_page=101` → 400; `page=0` → 400; `limit=5` → 400.
 
 ## Not changing
 
 `GET /workouts/:id`, `POST /workouts`, `DELETE /workouts/:id`, the auth
-endpoints, and `GET /analytics/weekly-volume` are untouched by this feature.
-In particular, weekly volume keeps taking a `week` key (`YYYY-Www`) rather
-than a date range — the dashboard sends it the ISO key for the same week it
-sends `after`/`before` for, and `packages/shared`'s `isoWeekKey` remains the
-one definition of what a week is (research #9).
+endpoints, and `GET /analytics/weekly-volume` are untouched. Weekly volume in
+particular is an aggregate for one week (`{ week, volumes }`), not a list, so
+the envelope does not apply to it — `GET /workouts` is currently the only list
+endpoint in the API.

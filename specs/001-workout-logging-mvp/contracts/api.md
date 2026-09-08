@@ -60,15 +60,37 @@ column remains for now.
 
 ## Reading data
 
+### Pagination (all list endpoints)
+
+Every list endpoint takes the same two query params and answers in the same
+envelope. Superseded spec 003: `limit` no longer exists and is rejected.
+
+- Query: `?page=` (integer ≥ 1, default 1) and `?per_page=` (integer 1–100,
+  default 20). Out-of-range or non-integer values → 400. A page past the end
+  returns an empty `data` array with `next_page: null`, not an error.
+- 200: `{ data: [...], total, page, per_page, next_page, prev_page }`
+  - `total` — rows matching the filters, across all pages.
+  - `next_page` / `prev_page` — page numbers, or `null` at the ends. Derivable
+    from the other three; present so a client can page by null-check rather
+    than by arithmetic.
+
+Any list endpoint's ordering MUST end in a unique column. Offset pagination
+over a non-total ordering silently skips and repeats rows between pages,
+because the database may order tied rows differently for each page's query.
+
 ### `GET /workouts`
 - Auth required. Scoped to caller (FR-015).
-- Query: `?status=&limit=&before=&after=` (sorted/paginated by `performed_at`
-  desc, not `created_at` — a backlogged entry sorts by when it happened, not
-  when it was uploaded). `before` (ISO8601, exclusive) and `after` (ISO8601,
-  inclusive) bound `performed_at` as a half-open `[after, before)` window —
-  pass both to fetch a single week (`after` = week start, `before` = next
-  week start).
-- 200: `{ workouts: [{ id, name, source, status, performed_at, created_at }] }`
+- Sorted by `performed_at` desc, then `id` desc — not `created_at`, since a
+  backlogged entry sorts by when it happened, not when it was uploaded. The
+  `id` tie-break is required, not cosmetic: the web form supplies a date, so
+  every workout logged for one day shares `performed_at` exactly.
+- Query: `?status=&before=&after=` plus the pagination params above.
+  `before` (ISO8601, exclusive) and `after` (ISO8601, inclusive) are filters,
+  not pagination: they bound `performed_at` as a half-open `[after, before)`
+  window — pass both to fetch a single week (`after` = week start, `before` =
+  next week start).
+- 200: the standard envelope, with
+  `data: [{ id, name, source, status, performed_at, created_at }]`
 
 ### `GET /workouts/:id`
 - Auth required. 404 (not 403) if the workout belongs to another user

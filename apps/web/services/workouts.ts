@@ -27,14 +27,18 @@ import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/wor
 /**
  * Query for {@link listWorkouts}, mirroring `GET /workouts` in contracts/api.md.
  *
- * `after` (inclusive) and `before` (exclusive) bound `performed_at` as a
- * half-open `[after, before)` window — pass both to fetch a single week.
- * Omitting `limit` leaves the API's own default (20) in force, which is rarely
- * what a bounded window wants.
+ * `page`/`per_page` are the pagination; every list endpoint takes the same two
+ * and answers in the same envelope. Omitting them means page 1 at the API's
+ * default page size of 20.
+ *
+ * `before` (exclusive) and `after` (inclusive) are *filters*, not pagination:
+ * they bound `performed_at` as a half-open `[after, before)` window — pass both
+ * to fetch a single week.
  */
 export interface ListWorkoutsQuery {
   status?: WorkoutStatus;
-  limit?: number;
+  page?: number;
+  per_page?: number;
   /** ISO 8601. Exclusive upper bound on `performed_at`. */
   before?: string;
   /** ISO 8601. Inclusive lower bound on `performed_at`. */
@@ -52,7 +56,8 @@ export interface ListWorkoutsQuery {
 export async function listWorkouts(query: ListWorkoutsQuery = {}): Promise<WorkoutListResponse> {
   const params = new URLSearchParams();
   if (query.status) params.set('status', query.status);
-  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.page !== undefined) params.set('page', String(query.page));
+  if (query.per_page !== undefined) params.set('per_page', String(query.per_page));
   if (query.before) params.set('before', query.before);
   if (query.after) params.set('after', query.after);
 

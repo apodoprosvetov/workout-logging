@@ -137,20 +137,22 @@ than trusting this note.
 
 **Independent Test**: quickstart.md Scenario 5 — create 25 workouts on one date, page all the way forward, and confirm each appears exactly once.
 
+> **Revised 2026-09-08.** T030–T036 originally specified a composite keyset cursor (`before_id`). After the failure was reproduced against Postgres and the options compared, the approach changed to a total ordering plus shared offset pagination in one envelope — see research #2 and #11, and contracts/api-delta.md. The tasks below are the revised set.
+
 ### Contract tests for User Story 4 ⚠️
 
 > Write these first and confirm they FAIL before the implementation tasks below.
 
-- [ ] T030 [US4] Add contract tests for `before_id` to `apps/api/tests/contract/workouts.list.spec.ts`, matching the file's existing style: (a) with several workouts sharing one `performed_at` and a page boundary among them, paging with `(before, before_id)` returns every workout exactly once; (b) `before_id` without `before` → 400; (c) a malformed `before_id` → 400; (d) `before` alone still behaves as a plain exclusive bound (regression guard for existing callers) — see contracts/api-delta.md
+- [X] T030 [US4] Add contract tests to `apps/api/tests/contract/workouts.list.spec.ts`, matching the file's existing style: (a) rows sharing one `performed_at` come back in `id DESC` order and in the same order on a repeated request; (b) paging with `per_page=2` over 7 workouts, 5 sharing a `performed_at`, visits every row exactly once; (c) the envelope defaults to `page: 1`, `per_page: 20`, `prev_page: null`; (d) a page past the end returns `data: []` with `next_page: null` and status 200; (e) `per_page=101`, `page=0` and the retired `limit=5` each → 400 — see contracts/api-delta.md
 
 ### Implementation for User Story 4
 
-- [ ] T031 [US4] In `apps/api/src/workouts/dto/list-workouts-query.dto.ts`, add an optional `before_id` validated as a UUID, and reject `before_id` supplied without `before` with a 400 (contracts/api-delta.md)
-- [ ] T032 [US4] In `apps/api/src/workouts/workouts.service.ts`, change the keyset filter to the row-value comparison `(w.performed_at, w.id) < (:before, :before_id)` when `before_id` is present, and change the sort to `performed_at DESC, id DESC` so the comparison and the ordering agree; `before` without `before_id` keeps its current exclusive-bound meaning exactly (FR-022, research #2)
-- [ ] T033 [P] [US4] In `packages/shared/src/entities/workout.entity.ts`, extend the `@Index(['userId', 'performedAt'])` decorator to carry `'id'`, so the index matches the new cursor (data-model.md §1)
+- [X] T031 [US4] Add `apps/api/src/common/pagination.dto.ts` (`PaginationQueryDto` with `page` ≥ 1 default 1, and `per_page` 1–100 default 20) and `apps/api/src/common/pagination.ts` (`Paginated<T>` plus a `paginate()` helper that applies skip/take, runs `getManyAndCount()` and builds the envelope). A base DTO rather than a `@Pagination()` decorator, so the global ValidationPipe keeps doing the parsing and validation (research #11)
+- [X] T032 [US4] In `apps/api/src/workouts/dto/list-workouts-query.dto.ts`, extend `PaginationQueryDto` and drop `limit`; in `apps/api/src/workouts/workouts.service.ts`, append `id DESC` to the ordering so it is a total order, and return `paginate(qb, query, map)` instead of a bare `{ workouts }` (FR-022, research #2)
+- [ ] T033 [P] [US4] In `packages/shared/src/entities/workout.entity.ts`, extend the `@Index(['userId', 'performedAt'])` decorator to carry `'id'`, so the index satisfies the new total ordering (data-model.md §1)
 - [ ] T034 [US4] Add a migration under `packages/shared/src/db/migrations/` replacing index `IDX_e6a14b328d153b3050dd0773af` on `("user_id", "performed_at")` with one on `("user_id", "performed_at" DESC, "id" DESC)`, with a `down` that restores the two-column form; trim any unrelated statements `migration:generate` emits, as prior migrations in this directory document (research #3)
-- [ ] T035 [US4] Fold the `after` and `before_id` parameter documentation from contracts/api-delta.md into `specs/001-workout-logging-mvp/contracts/api.md`, which remains the single authoritative contract
-- [ ] T036 [US4] In `apps/web/features/workouts/workout-list.tsx`, change the cursor stack from `performed_at` strings to `(before, beforeId)` pairs, pushing the last visible row's `performed_at` **and** `id` when paging forward and popping when paging back (FR-022, data-model.md → HistoryCursor)
+- [X] T035 [US4] Fold the pagination envelope, the `page`/`per_page` params and the ordering rule from contracts/api-delta.md into `specs/001-workout-logging-mvp/contracts/api.md`, which remains the single authoritative contract
+- [X] T036 [US4] In `apps/web/features/workouts/workout-list.tsx`, replace the cursor stack with a single `page` integer driven by the response's `next_page`/`prev_page`, and drop the over-fetch-by-one trick now that `total` and `next_page` are returned; add `Paginated<T>` to `apps/web/lib/pagination.ts` and `page`/`per_page` to `listWorkouts` in `apps/web/services/workouts.ts` (FR-022, data-model.md → Page position)
 - [X] T037 [US4] Render the history list in `apps/web/features/workouts/workout-list.tsx` through the shared `WorkoutTable` from T008, removing the duplicated row markup (FR-024)
 - [X] T038 [P] [US4] Confirm the paging controls in `apps/web/features/workouts/workout-list.tsx` are disabled on the first page and when no further page exists (FR-023)
 

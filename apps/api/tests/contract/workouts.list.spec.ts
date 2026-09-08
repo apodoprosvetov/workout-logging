@@ -90,7 +90,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    const ids = (res.body.workouts as Array<{ id: string }>).map((w) => w.id);
+    const ids = (res.body.data as Array<{ id: string }>).map((w) => w.id);
     expect(ids.indexOf(newer)).toBeLessThan(ids.indexOf(older));
     expect(ids).not.toContain(otherUsersWorkout);
   });
@@ -106,18 +106,121 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    const rows = res.body.workouts as Array<{ id: string; status: string }>;
+    const rows = res.body.data as Array<{ id: string; status: string }>;
     expect(rows.every((w) => w.status === 'needs_review')).toBe(true);
     expect(rows.map((w) => w.id)).toContain(needsReviewId);
   });
 
-  it('respects limit', async () => {
+  it('respects per_page', async () => {
     const res = await request(httpServer(app))
-      .get('/api/workouts?limit=1')
+      .get('/api/workouts?per_page=1')
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.workouts).toHaveLength(1);
+    expect(res.body.data).toHaveLength(1);
+  });
+
+  it('returns the pagination envelope, defaulting to page 1 and per_page 20', async () => {
+    const res = await request(httpServer(app)).get('/api/workouts').set('authorization', `Bearer ${accessToken}`);
+
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      data: unknown[];
+      total: number;
+      page: number;
+      per_page: number;
+      next_page: number | null;
+      prev_page: number | null;
+    };
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.page).toBe(1);
+    expect(body.per_page).toBe(20);
+    expect(typeof body.total).toBe('number');
+    expect(body.prev_page).toBeNull();
+  });
+
+  it('walks every page exactly once, including rows that share a performed_at', async () => {
+    // The case that broke the previous `before` cursor: with several workouts
+    // on one date, a strict `performed_at < cursor` dropped the whole tie group
+    // (reproduced against Postgres — two of three rows became unreachable).
+    // Offset paging survives it only because the sort is a total order; this
+    // test is what fails if the `id` tie-break is ever removed.
+    const own = await registerAndGetToken('paging');
+    const ds = createTypeOrmDataSource();
+    await ds.initialize();
+    const sameDay = new Date('2014-08-11T00:00:00.000Z');
+    const seeded: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      seeded.push(
+        await seedWorkout(ds, own.userId, {
+          // 5 of 7 share one performed_at, so a page boundary at per_page=2
+          // necessarily falls inside the tie group.
+          performedAt: i < 5 ? sameDay : new Date(`2014-08-1${i}T00:00:00.000Z`),
+        }),
+      );
+    }
+    await ds.destroy();
+
+    const seen: string[] = [];
+    let page: number | null = 1;
+    for (let guard = 0; page !== null && guard < 10; guard += 1) {
+      const res = await request(httpServer(app))
+        .get(`/api/workouts?page=${page}&per_page=2`)
+        .set('authorization', `Bearer ${own.accessToken}`);
+      expect(res.status).toBe(200);
+      const body = res.body as { data: Array<{ id: string }>; total: number; next_page: number | null };
+      expect(body.total).toBe(seeded.length);
+      seen.push(...body.data.map((w) => w.id));
+      page = body.next_page;
+    }
+
+    expect(seen).toHaveLength(seeded.length); // nothing repeated
+    expect([...seen].sort()).toEqual([...seeded].sort()); // nothing skipped
+  });
+
+  it('returns an empty page, not an error, past the last page', async () => {
+    const res = await request(httpServer(app))
+      .get('/api/workouts?page=9999&per_page=20')
+      .set('authorization', `Bearer ${accessToken}`);
+
+    expect(res.status).toBe(200);
+    const body = res.body as { data: unknown[]; next_page: number | null };
+    expect(body.data).toEqual([]);
+    expect(body.next_page).toBeNull();
+  });
+
+  it('orders workouts sharing a performed_at deterministically, by id desc', async () => {
+    // performedAt alone is not a total order, and ties are ordinary here: the
+    // web form supplies a date, so everything logged for one day collides to
+    // the microsecond. Without the id tie-break Postgres returns tied rows in
+    // plan-dependent order (confirmed: A,B,C on a seq scan, C,B,A on an index
+    // scan), which makes any pagination over them unsound.
+    const ds = createTypeOrmDataSource();
+    await ds.initialize();
+    const sharedPerformedAt = new Date('2015-04-07T00:00:00.000Z');
+    const tiedIds = [
+      await seedWorkout(ds, userId, { performedAt: sharedPerformedAt }),
+      await seedWorkout(ds, userId, { performedAt: sharedPerformedAt }),
+      await seedWorkout(ds, userId, { performedAt: sharedPerformedAt }),
+    ];
+    await ds.destroy();
+
+    const fetchTiedOrder = async (): Promise<string[]> => {
+      const res = await request(httpServer(app))
+        .get('/api/workouts?per_page=100')
+        .set('authorization', `Bearer ${accessToken}`);
+      expect(res.status).toBe(200);
+      return (res.body.data as Array<{ id: string }>)
+        .map((w) => w.id)
+        .filter((id) => tiedIds.includes(id));
+    };
+
+    const order = await fetchTiedOrder();
+    expect(order).toHaveLength(tiedIds.length);
+    // Contractual order, not merely "some stable order".
+    expect(order).toEqual([...tiedIds].sort().reverse());
+    // And it must not drift between identical requests.
+    expect(await fetchTiedOrder()).toEqual(order);
   });
 
   it('paginates with before (by performed_at, not created_at)', async () => {
@@ -137,7 +240,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    const rows = res.body.workouts as Array<{ id: string; performed_at: string }>;
+    const rows = res.body.data as Array<{ id: string; performed_at: string }>;
     expect(rows.every((w) => new Date(w.performed_at).getTime() < beforeCursor.getTime())).toBe(true);
     expect(rows.map((w) => w.id)).toContain(olderId);
     expect(rows.map((w) => w.id)).not.toContain(newerId);
@@ -161,7 +264,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    const rows = res.body.workouts as Array<{ id: string; performed_at: string }>;
+    const rows = res.body.data as Array<{ id: string; performed_at: string }>;
     expect(rows.every((w) => new Date(w.performed_at).getTime() >= afterCursor.getTime())).toBe(true);
     expect(rows.map((w) => w.id)).toEqual(expect.arrayContaining([onCursorId, afterCursorId]));
     expect(rows.map((w) => w.id)).not.toContain(beforeCursorId);
@@ -186,7 +289,7 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
       .set('authorization', `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
-    const ids = (res.body.workouts as Array<{ id: string }>).map((w) => w.id);
+    const ids = (res.body.data as Array<{ id: string }>).map((w) => w.id);
     expect(ids).toContain(inWeekId);
     expect(ids).not.toContain(beforeWeekId);
     expect(ids).not.toContain(onNextWeekStartId);
@@ -206,8 +309,27 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 400 for a limit over the max', async () => {
-    const res = await request(httpServer(app)).get('/api/workouts?limit=101').set('authorization', `Bearer ${accessToken}`);
+  it('returns 400 for a per_page over the max', async () => {
+    const res = await request(httpServer(app))
+      .get('/api/workouts?per_page=101')
+      .set('authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for a page below 1', async () => {
+    const res = await request(httpServer(app))
+      .get('/api/workouts?page=0')
+      .set('authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects the retired limit parameter', async () => {
+    // forbidNonWhitelisted in main.ts's ValidationPipe: `limit` is gone, and a
+    // caller still sending it gets told so rather than silently paginated by
+    // the defaults.
+    const res = await request(httpServer(app))
+      .get('/api/workouts?limit=5')
+      .set('authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(400);
   });
 });

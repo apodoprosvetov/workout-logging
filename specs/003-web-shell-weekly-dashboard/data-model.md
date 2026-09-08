@@ -19,7 +19,7 @@ The only schema change in the feature.
 | **New** | same name-space, on `("user_id", "performed_at" DESC, "id" DESC)` |
 | **Declared in** | `packages/shared/src/entities/workout.entity.ts` — the `@Index(['userId', 'performedAt'])` decorator gains `'id'` |
 | **Applied by** | a new migration under `packages/shared/src/db/migrations/` |
-| **Why** | the composite keyset cursor compares the row value `(performed_at, id)`; the index must carry both columns in the query's sort order for that to seek rather than filter (research #2, #3) |
+| **Why** | the list's `ORDER BY` now ends in `id` to make it a total order; the index must carry both columns in that order so the sort is satisfied by the scan instead of added on top (research #2, #3) |
 
 `synchronize` is false in this project, so the migration is the only thing
 that changes the database — and it runs on every deploy already (spec 002's
@@ -75,19 +75,30 @@ column layout have exactly one definition each in `lib/workouts.ts` /
 `components/workout-table.tsx`. A list may choose which columns to show; it
 may not restate how a column looks (FR-024).
 
-### HistoryCursor
+### Page position
 
-The `/workouts` page's paging state. Replaces the current
-`(string | undefined)[]` stack of `performed_at` values.
+The `/workouts` page's paging state. Replaces the earlier
+`(string | undefined)[]` cursor stack, and the composite `(before, before_id)`
+cursor that briefly replaced it (research #2).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `before` | ISO string \| undefined | undefined on page 1 |
-| `beforeId` | string \| undefined | the id of the same row; always set or unset together with `before` |
+| `page` | integer ≥ 1 | the entire paging state |
 
-Held as a stack, one entry per page visited, so "newer" pops rather than
-refetches from the start. Pushing a page appends the **last visible row's**
-`(performed_at, id)`; the pair is what makes FR-022 hold.
+One integer. "Newer" and "Older" set it from the `prev_page` / `next_page` the
+last response carried, so the client never computes a page number itself and
+never has to know how many rows exist.
+
+The response envelope (`Paginated<T>` in `apps/web/lib/pagination.ts`) mirrors
+the API's: `data`, `total`, `page`, `per_page`, `next_page`, `prev_page`. Two
+consequences worth naming:
+
+- **The over-fetch is gone.** The list used to request `PAGE_SIZE + 1` rows and
+  infer "there is more" from getting a full extra one. `next_page !== null`
+  says it outright.
+- **`total` is displayed**, so the header can show a real count — and the
+  optimistic delete adjusts it with the row so the count never contradicts the
+  list while a request is in flight.
 
 ## 3. Client-side signal: logged workout
 
