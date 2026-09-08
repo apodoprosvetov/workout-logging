@@ -1,8 +1,14 @@
 name: Deploy
 
+# Manual-only while prod is parked. The EC2 instance (compute.tf) is kept
+# stopped during development — `npm run prod:stop` — so an automatic deploy
+# on every push to main would just fail at the SSM step (send-command never
+# reaches a stopped instance) and paint main red. Bring prod back with
+# `npm run prod:start`, then dispatch this workflow.
+# To restore continuous deployment: add `push: branches: [main]` back here
+# and drop ci.yml's own `push` trigger (added when this one was removed) so
+# CI doesn't run twice per push.
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       sha:
@@ -17,12 +23,13 @@ permissions:
   pull-requests: read # for the reusable CI workflow's gitleaks (secret-scan) job
 
 jobs:
-  # Gate: run the full CI suite (ci.yml) first on a push. If it goes red the
-  # `deploy` job below is skipped, so a failing test never reaches prod.
-  # Skipped on workflow_dispatch — a manual rollback ships a previously-green
-  # image and must not be blocked by CI flakes on an unrelated newer commit.
+  # Gate: run the full CI suite (ci.yml) first. If it goes red the `deploy`
+  # job below is skipped, so a failing test never reaches prod.
+  # Skipped when an explicit `sha` was given — that's a rollback, shipping a
+  # previously-green image, and it must not be blocked by CI flakes on an
+  # unrelated newer commit.
   ci:
-    if: github.event_name == 'push'
+    if: github.event.inputs.sha == ''
     uses: ./.github/workflows/ci.yml
 
   deploy:

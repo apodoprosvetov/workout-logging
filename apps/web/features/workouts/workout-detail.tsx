@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, apiJson } from '../../lib/api-client';
-import { useRequireAuth } from '../../lib/use-require-auth';
-import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutDetail as WorkoutDetailData } from '../../lib/workouts';
+import { getWorkout } from '@services/workouts';
+import { useRequireAuth } from '@hooks/use-require-auth';
+import { formatPerformedAt, statusBadgeClass, statusLabel, type WorkoutDetail as WorkoutDetailData } from '@lib/workouts';
 
 export function WorkoutDetail({ id }: { id: string }) {
   const ready = useRequireAuth();
@@ -15,14 +15,21 @@ export function WorkoutDetail({ id }: { id: string }) {
   const load = useCallback(async () => {
     setError(null);
     setNotFound(false);
+    // Drop the previous workout before fetching. `load` is keyed on `id`, so
+    // navigating from one workout to another re-runs this — without the reset
+    // the old workout stays painted, under the new id, until the fetch lands
+    // (T039). Clearing it puts the panel back into its loading state instead.
+    setWorkout(null);
     try {
-      const data = await apiJson<WorkoutDetailData>(`/workouts/${id}`);
-      setWorkout(data);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      // null means "no such workout to show" — see getWorkout; anything that
+      // actually went wrong still throws.
+      const data = await getWorkout(id);
+      if (data === null) {
         setNotFound(true);
         return;
       }
+      setWorkout(data);
+    } catch {
       setError('Could not load this workout. Please try again.');
     }
   }, [id]);
@@ -38,7 +45,7 @@ export function WorkoutDetail({ id }: { id: string }) {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-10">
-      <Link href="/dashboard" className="text-sm font-medium text-zinc-600 underline dark:text-zinc-400">
+      <Link href="/workouts" className="text-sm font-medium text-zinc-600 underline dark:text-zinc-400">
         ← Back to workouts
       </Link>
 

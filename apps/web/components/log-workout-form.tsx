@@ -1,7 +1,5 @@
-'use client';
-
 import { useEffect, useId, useRef, useState } from 'react';
-import { apiFetch } from '../../lib/api-client';
+import { apiFetch } from '@services/api-client';
 
 interface LogWorkoutFormProps {
   onLogged: () => void;
@@ -128,12 +126,9 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
   const nothingToSubmit = text.trim() === '' && images.length === 0;
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
-    >
+    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
       <label htmlFor={textId} className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-        Log a workout
+        What did you do?
       </label>
       <textarea
         id={textId}

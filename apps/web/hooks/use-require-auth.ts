@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
-import { loadTokens } from './api-client';
+import { loadTokens } from '@services/api-client';
 
 function hasStoredSession(): boolean {
   return loadTokens() !== null;

@@ -143,6 +143,62 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     expect(rows.map((w) => w.id)).not.toContain(newerId);
   });
 
+  it('filters by after (inclusive lower bound on performed_at)', async () => {
+    const ds = createTypeOrmDataSource();
+    await ds.initialize();
+    const afterCursor = new Date('2018-06-01T00:00:00.000Z');
+    const beforeCursorId = await seedWorkout(ds, userId, {
+      performedAt: new Date('2018-05-01T00:00:00.000Z'),
+    });
+    const onCursorId = await seedWorkout(ds, userId, { performedAt: afterCursor });
+    const afterCursorId = await seedWorkout(ds, userId, {
+      performedAt: new Date('2018-07-01T00:00:00.000Z'),
+    });
+    await ds.destroy();
+
+    const res = await request(httpServer(app))
+      .get(`/api/workouts?after=${afterCursor.toISOString()}`)
+      .set('authorization', `Bearer ${accessToken}`);
+
+    expect(res.status).toBe(200);
+    const rows = res.body.workouts as Array<{ id: string; performed_at: string }>;
+    expect(rows.every((w) => new Date(w.performed_at).getTime() >= afterCursor.getTime())).toBe(true);
+    expect(rows.map((w) => w.id)).toEqual(expect.arrayContaining([onCursorId, afterCursorId]));
+    expect(rows.map((w) => w.id)).not.toContain(beforeCursorId);
+  });
+
+  it('fetches a single week with after + before as a half-open [after, before) window', async () => {
+    const ds = createTypeOrmDataSource();
+    await ds.initialize();
+    const weekStart = new Date('2017-03-06T00:00:00.000Z'); // Monday
+    const nextWeekStart = new Date('2017-03-13T00:00:00.000Z');
+    const inWeekId = await seedWorkout(ds, userId, {
+      performedAt: new Date('2017-03-08T12:00:00.000Z'),
+    });
+    const beforeWeekId = await seedWorkout(ds, userId, {
+      performedAt: new Date('2017-03-05T12:00:00.000Z'),
+    });
+    const onNextWeekStartId = await seedWorkout(ds, userId, { performedAt: nextWeekStart });
+    await ds.destroy();
+
+    const res = await request(httpServer(app))
+      .get(`/api/workouts?after=${weekStart.toISOString()}&before=${nextWeekStart.toISOString()}`)
+      .set('authorization', `Bearer ${accessToken}`);
+
+    expect(res.status).toBe(200);
+    const ids = (res.body.workouts as Array<{ id: string }>).map((w) => w.id);
+    expect(ids).toContain(inWeekId);
+    expect(ids).not.toContain(beforeWeekId);
+    expect(ids).not.toContain(onNextWeekStartId);
+  });
+
+  it('returns 400 for a malformed after value', async () => {
+    const res = await request(httpServer(app))
+      .get('/api/workouts?after=not-a-date')
+      .set('authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(400);
+  });
+
   it('returns 400 for an invalid status value', async () => {
     const res = await request(httpServer(app))
       .get('/api/workouts?status=not-a-real-status')

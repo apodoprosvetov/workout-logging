@@ -62,9 +62,12 @@ column remains for now.
 
 ### `GET /workouts`
 - Auth required. Scoped to caller (FR-015).
-- Query: `?status=&limit=&before=` (sorted/paginated by `performed_at` desc,
-  not `created_at` — a backlogged entry sorts by when it happened, not
-  when it was uploaded)
+- Query: `?status=&limit=&before=&after=` (sorted/paginated by `performed_at`
+  desc, not `created_at` — a backlogged entry sorts by when it happened, not
+  when it was uploaded). `before` (ISO8601, exclusive) and `after` (ISO8601,
+  inclusive) bound `performed_at` as a half-open `[after, before)` window —
+  pass both to fetch a single week (`after` = week start, `before` = next
+  week start).
 - 200: `{ workouts: [{ id, name, source, status, performed_at, created_at }] }`
 
 ### `GET /workouts/:id`

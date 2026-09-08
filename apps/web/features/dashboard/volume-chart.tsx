@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiJson } from '../../lib/api-client';
-import { weekKeyForOffset, type WeeklyVolumeResponse } from '../../lib/analytics';
+import { apiJson } from '@services/api-client';
+import { weekKeyForOffset, type WeeklyVolumeResponse } from '@lib/analytics';
 
 // FR-017: weekly training volume per muscle group. One measure across ~10
 // categories -> a sorted horizontal bar chart (dataviz: magnitude comparison).
@@ -10,14 +10,11 @@ import { weekKeyForOffset, type WeeklyVolumeResponse } from '../../lib/analytics
 // bar (bar length carries the value, colour carries nothing). Labels/values use
 // ink tokens, never the bar colour.
 
-const MAX_WEEKS_BACK = 12;
-
 function formatVolume(v: number): string {
   return Math.round(v).toLocaleString();
 }
 
-export function VolumeChart() {
-  const [weeksAgo, setWeeksAgo] = useState(0);
+export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
   const [data, setData] = useState<WeeklyVolumeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,32 +37,9 @@ export function VolumeChart() {
   const max = data && data.volumes.length > 0 ? data.volumes[0].volume : 0;
 
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+    <section className="flex flex-col w-full gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium text-black dark:text-zinc-50">Weekly volume by muscle group</h2>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-label="Previous week"
-            disabled={weeksAgo >= MAX_WEEKS_BACK}
-            onClick={() => setWeeksAgo((w) => Math.min(MAX_WEEKS_BACK, w + 1))}
-            className="rounded px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-100 disabled:opacity-30 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            ‹
-          </button>
-          <span className="min-w-[4.5rem] text-center text-sm tabular-nums text-zinc-500">
-            {data?.week ?? weekKeyForOffset(weeksAgo)}
-          </span>
-          <button
-            type="button"
-            aria-label="Next week"
-            disabled={weeksAgo <= 0}
-            onClick={() => setWeeksAgo((w) => Math.max(0, w - 1))}
-            className="rounded px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-100 disabled:opacity-30 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            ›
-          </button>
-        </div>
       </div>
 
       {error && (

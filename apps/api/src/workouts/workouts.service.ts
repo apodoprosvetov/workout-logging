@@ -18,6 +18,10 @@ export class WorkoutsService {
   // filter, never taken from the query/path. Sorted/paginated by performedAt
   // (when the workout happened), not createdAt (when it was ingested) — a
   // backlogged entry should sort by its real date, not upload order.
+  //
+  // `before` (exclusive) / `after` (inclusive) bound performedAt as a
+  // half-open [after, before) window — pass both to fetch a single ISO
+  // week (after = week start, before = next week start).
   async list(userId: string, query: ListWorkoutsQueryDto) {
     const qb = this.workoutRepository
       .createQueryBuilder('w')
@@ -27,6 +31,7 @@ export class WorkoutsService {
 
     if (query.status) qb.andWhere('w.status = :status', { status: query.status });
     if (query.before) qb.andWhere('w.performedAt < :before', { before: new Date(query.before) });
+    if (query.after) qb.andWhere('w.performedAt >= :after', { after: new Date(query.after) });
 
     const workouts = await qb.getMany();
     return {

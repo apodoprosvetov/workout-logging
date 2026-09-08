@@ -27,3 +27,19 @@ export function isoWeekKey(date: Date): string {
 export function weekKeyForOffset(weeksAgo: number): string {
   return isoWeekKey(new Date(Date.now() - weeksAgo * 7 * 86_400_000));
 }
+
+// `D Mon` (e.g. `10 Jun`) for a date, in UTC.
+export function formatDayMonth(date: Date): string {
+  // en-GB orders day before month ("10 Jun"); en-US would give "Jun 10".
+  return date.toLocaleString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+// First (Monday) and last (Sunday) day of the ISO week `weeksAgo` weeks before
+// the current one (0 = this week), each formatted as `D Mon` (e.g. `10 Jun`).
+export function weekRangeForOffset(weeksAgo: number): { start: Date; end: Date } {
+  const ref = new Date(Date.now() - weeksAgo * 7 * 86_400_000);
+  const monday = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate()));
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  const sunday = new Date(monday.getTime() + 6 * 86_400_000);
+  return { start: monday, end: sunday };
+}

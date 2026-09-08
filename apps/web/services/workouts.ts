@@ -1,69 +1,98 @@
-// Types mirror contracts/api.md's GET /workouts and GET /workouts/:id
-// response shapes exactly — apps/web only knows the HTTP contract, not
-// apps/api's internal TypeORM entities (plan.md: apps/web never touches the
-// DB layer, only calls apps/api over HTTP).
+// HTTP operations against apps/api's /workouts routes.
+//
+// Distinct from lib/workouts.ts, which holds the contract *types* and pure
+// formatters — this is the IO half (plan.md: services/ for IO clients, lib/ for
+// pure helpers and types). At the import site the alias keeps them apart:
+// `@services/workouts` calls the API, `@lib/workouts` describes its shapes.
+//
+// Extension contract — follow it when adding listWorkouts, getWorkout,
+// createWorkout and the rest, so callers can predict a new function without
+// reading it:
+//
+//   1. One exported async function per API operation, named for the operation.
+//   2. Plain arguments in — never a Response, a Headers or a URLSearchParams.
+//      Building the query string is this module's job, not the caller's.
+//   3. Resolves with the parsed body, or void when the endpoint returns none.
+//   4. Throws ApiError (from ./api-client) on anything the caller must handle.
+//      Callers never inspect status codes; that knowledge stays here.
+//   5. Any non-2xx status deliberately treated as success is documented on the
+//      function that does it, with the reason.
+//
+// Auth, token refresh and retry are already handled underneath by apiFetch —
+// nothing here should touch tokens.
 
-export type WorkoutStatus = 'pending' | 'parsed' | 'needs_review' | 'failed';
-export type WorkoutSource = 'web' | 'telegram';
-export type SetUnit = 'kg' | 'lb';
+import { ApiError, apiFetch, apiJson } from './api-client';
+import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/workouts';
 
-export interface WorkoutListItem {
-  id: string;
-  name: string | null;
-  source: WorkoutSource;
-  status: WorkoutStatus;
-  performed_at: string;
-  created_at: string;
+/**
+ * Query for {@link listWorkouts}, mirroring `GET /workouts` in contracts/api.md.
+ *
+ * `after` (inclusive) and `before` (exclusive) bound `performed_at` as a
+ * half-open `[after, before)` window — pass both to fetch a single week.
+ * Omitting `limit` leaves the API's own default (20) in force, which is rarely
+ * what a bounded window wants.
+ */
+export interface ListWorkoutsQuery {
+  status?: WorkoutStatus;
+  limit?: number;
+  /** ISO 8601. Exclusive upper bound on `performed_at`. */
+  before?: string;
+  /** ISO 8601. Inclusive lower bound on `performed_at`. */
+  after?: string;
 }
 
-export interface WorkoutListResponse {
-  workouts: WorkoutListItem[];
+/**
+ * GET /workouts — the caller's page or window of workouts, newest first.
+ *
+ * Deliberately not clever: it does not know about page sizes, cursors or
+ * over-fetching. Those are policies of whoever is paginating, and they differ
+ * between the history list and the dashboard's week view. This function's whole
+ * job is turning a typed query into a request.
+ */
+export async function listWorkouts(query: ListWorkoutsQuery = {}): Promise<WorkoutListResponse> {
+  const params = new URLSearchParams();
+  if (query.status) params.set('status', query.status);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.before) params.set('before', query.before);
+  if (query.after) params.set('after', query.after);
+
+  const search = params.toString();
+  return apiJson<WorkoutListResponse>(search ? `/workouts?${search}` : '/workouts');
 }
 
-export interface WorkoutSetItem {
-  order: number;
-  weight: number;
-  reps: number;
-  unit: SetUnit;
+/**
+ * GET /workouts/:id — one workout with its exercises and sets, or `null` when
+ * there is no such workout to show.
+ *
+ * Null rather than a thrown 404, so callers never touch status codes (rule 4
+ * above). "Not found" is an ordinary outcome this screen renders, not a
+ * failure: the endpoint answers 404 both for an id that does not exist and for
+ * another user's workout (contracts/api.md — never confirm the existence of
+ * someone else's data), and the caller can act on neither differently. Every
+ * other non-2xx still throws ApiError.
+ */
+export async function getWorkout(id: string): Promise<WorkoutDetail | null> {
+  try {
+    return await apiJson<WorkoutDetail>(`/workouts/${id}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
-export interface WorkoutExerciseItem {
-  name: string;
-  order: number;
-  sets: WorkoutSetItem[];
-}
+/**
+ * DELETE /workouts/:id — resolves once the workout is gone.
+ *
+ * 404 counts as success. The endpoint answers 404 both for a workout that never
+ * existed and for one belonging to another user (contracts/api.md: never
+ * confirm the existence of someone else's data), and in either case the
+ * caller's goal — "this row should not be there" — already holds. Reporting it
+ * as a failure would make a double-click look like an error.
+ */
+export async function deleteWorkout(id: string): Promise<void> {
+  const response = await apiFetch(`/workouts/${id}`, { method: 'DELETE' });
+  if (response.ok || response.status === 404) return;
 
-export interface WorkoutDetail {
-  id: string;
-  name: string | null;
-  status: WorkoutStatus;
-  source: WorkoutSource;
-  performed_at: string;
-  exercises: WorkoutExerciseItem[];
-}
-
-const STATUS_LABEL: Record<WorkoutStatus, string> = {
-  pending: 'Pending',
-  parsed: 'Parsed',
-  needs_review: 'Needs review',
-  failed: 'Failed',
-};
-
-const STATUS_BADGE_CLASS: Record<WorkoutStatus, string> = {
-  pending: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200',
-  parsed: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  needs_review: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-  failed: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-};
-
-export function statusLabel(status: WorkoutStatus): string {
-  return STATUS_LABEL[status];
-}
-
-export function statusBadgeClass(status: WorkoutStatus): string {
-  return STATUS_BADGE_CLASS[status];
-}
-
-export function formatPerformedAt(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const body: unknown = await response.json().catch(() => undefined);
+  throw new ApiError(response.status, body);
 }

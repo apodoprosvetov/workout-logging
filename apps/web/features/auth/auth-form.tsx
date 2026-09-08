@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { apiFetchPublic, saveTokens, type StoredTokens } from '../../lib/api-client';
+import { apiFetchPublic, saveTokens, type StoredTokens } from '@services/api-client';
 
 interface AuthFormProps {
   mode: 'register' | 'login';

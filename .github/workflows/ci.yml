@@ -5,15 +5,22 @@
 #
 # Triggers:
 #   - pull_request → the gate for merging into main.
-#   - workflow_call → invoked by deploy.yml as its first job on every push
-#     to main, so a red suite blocks the deploy (deploy.yml's `deploy` job
-#     `needs: [ci]`). There is deliberately no `push` trigger here — that
-#     would run CI detached from deploy again, which is the exact bug this
-#     wiring fixes (CI red, deploy still shipped to prod).
+#   - workflow_call → invoked by deploy.yml as its first job, so a red suite
+#     blocks the deploy (deploy.yml's `deploy` job `needs: [ci]`).
+#   - push → main. Added when deploy.yml went manual-only (prod is parked,
+#     see the header there): deploy.yml used to be what ran CI on every push
+#     to main, so without this a direct push to main would get no test run
+#     at all until the next manual deploy. It runs CI detached from any
+#     deploy, which is safe only *because* deploying is now a deliberate
+#     dispatch that re-runs this suite as its gate. Restoring continuous
+#     deployment means dropping this trigger again — otherwise every push
+#     runs the suite twice.
 name: CI
 
 on:
   pull_request:
+    branches: [ main ]
+  push:
     branches: [ main ]
   workflow_call: {}
 
