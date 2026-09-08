@@ -23,8 +23,22 @@ export class ApiError extends Error {
 // In-memory cache backed by localStorage when available (browser), so every
 // request doesn't need a JSON.parse round-trip — and so this module is
 // testable outside a browser (no `window`) without changing its behavior.
+//
+// The cache is *observable*. It used to be write-only from the store's point of
+// view: once `hydrated` was set nothing re-read storage, and nothing announced
+// a change — so a sign-out in one tab left the other tab holding a token that
+// no longer existed, and a failed refresh cleared the session with no one
+// listening. Both are fixed here, by invalidating on the `storage` event and
+// notifying subscribers on every mutation (specs/003 T044, T045).
 let tokensCache: StoredTokens | null = null;
 let hydrated = false;
+
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  // Iterate a copy: a listener may unsubscribe while React handles the change.
+  for (const listener of [...listeners]) listener();
+}
 
 function hydrateFromStorage(): void {
   if (hydrated) return;
@@ -39,6 +53,39 @@ function hydrateFromStorage(): void {
   }
 }
 
+// One `storage` listener for the whole store, attached on first subscribe
+// rather than at module load — this module is imported during the static
+// export's prerender, where there is no window.
+let watchingStorage = false;
+
+function watchStorage(): void {
+  if (watchingStorage || typeof window === 'undefined') return;
+  watchingStorage = true;
+  window.addEventListener('storage', (event) => {
+    // `key === null` means another tab called localStorage.clear().
+    if (event.key !== null && event.key !== TOKEN_STORAGE_KEY) return;
+    // Drop the cache rather than trusting event.newValue: the next read
+    // re-hydrates from storage, which is the one source of truth.
+    tokensCache = null;
+    hydrated = false;
+    notify();
+  });
+}
+
+/**
+ * Subscribe to session changes — this tab's own sign-in/sign-out, and other
+ * tabs' via the `storage` event. Returns an unsubscribe function.
+ *
+ * Shaped for `useSyncExternalStore`, so it must stay a stable reference.
+ */
+export function subscribeToSession(listener: () => void): () => void {
+  watchStorage();
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 export function loadTokens(): StoredTokens | null {
   hydrateFromStorage();
   return tokensCache;
@@ -50,6 +97,7 @@ export function saveTokens(tokens: StoredTokens): void {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(tokens));
   }
+  notify();
 }
 
 export function clearTokens(): void {
@@ -58,6 +106,7 @@ export function clearTokens(): void {
   if (typeof window !== 'undefined') {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
   }
+  notify();
 }
 
 async function requestRefresh(refreshToken: string): Promise<StoredTokens | null> {
@@ -103,6 +152,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   if (response.status === 401 && tokens) {
     const refreshed = await refreshTokensOnce(tokens.refresh_token);
     if (!refreshed) {
+      // The session is over: the access token was rejected and the refresh
+      // token could not replace it. clearTokens() now notifies subscribers, so
+      // useRequireAuth sees the session disappear and sends the user to
+      // /login — this module stays out of routing, it just tells the truth
+      // about the session and lets the hook that owns redirects react (T045).
+      //
+      // The 401 is still returned rather than thrown, so an in-flight caller
+      // resolves normally instead of being left hanging mid-redirect.
       clearTokens();
       return response;
     }

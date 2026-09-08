@@ -7,7 +7,14 @@
 // rather than something the UI invokes, and moving it here would make
 // api-client import this module while this module imports api-client.
 
-import { apiFetchPublic, clearTokens, loadTokens, saveTokens, type StoredTokens } from './api-client';
+import {
+  apiFetchPublic,
+  clearTokens,
+  loadTokens,
+  saveTokens,
+  subscribeToSession,
+  type StoredTokens,
+} from './api-client';
 
 /**
  * Why an attempt did not establish a session. Domain outcomes, not HTTP —
@@ -100,3 +107,16 @@ export function logout(): void {
 export function hasSession(): boolean {
   return loadTokens() !== null;
 }
+
+/**
+ * Subscribe to session changes, for `useSyncExternalStore`.
+ *
+ * Fires on this tab's sign-in and sign-out, on another tab's (via the
+ * `storage` event), and when a failed token refresh ends the session
+ * mid-request — that last one is what turns an expired session into a
+ * redirect instead of a retry button that can only keep failing.
+ *
+ * Re-exported unchanged so callers depend on the session module rather than
+ * the transport underneath it; it must stay a stable reference.
+ */
+export { subscribeToSession };

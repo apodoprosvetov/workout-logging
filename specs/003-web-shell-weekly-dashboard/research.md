@@ -2,7 +2,7 @@
 
 **Feature**: 003-web-shell-weekly-dashboard | **Date**: 2026-09-08
 
-Eleven decisions. Most of this feature already exists in the working tree, so
+Twelve decisions. Most of this feature already exists in the working tree, so
 several entries record *why the existing shape stays* as much as what to
 build; where the review found a gap, the entry says what replaces it.
 
@@ -312,3 +312,51 @@ reimplement all of it.
 `GET /analytics/weekly-volume` returns a single week's aggregate, not a list.
 The abstraction therefore generalises from one case, and was deliberately kept
 thin for that reason; the second list endpoint gets to reshape it.
+
+---
+
+## 12. The session store announces its own changes
+
+**Added 2026-09-08**, resolving convergence findings F1/F2 (tasks T044, T045).
+
+**Decision**: `services/api-client.ts`'s token store becomes observable. It
+keeps its in-memory cache, and additionally: notifies subscribers on every
+`saveTokens`/`clearTokens`; attaches one `storage` listener (on first
+subscribe, not at module load — this module is imported during the static
+export's prerender) that drops the cache and notifies; and exposes
+`subscribeToSession`, re-exported through `services/auth.ts` for
+`useSyncExternalStore`.
+
+**Rationale**: The store was effectively write-only. `hydrateFromStorage()`
+returned early once `hydrated` was set, so `loadTokens()` never re-read
+storage, and nothing announced a change. Two user-visible failures followed,
+and neither was detectable from the code that suffered them:
+
+- **Cross-tab sign-out did nothing.** `use-require-auth.ts` did subscribe to
+  `storage`, but its snapshot came from the memoized cache, so React saw an
+  unchanged value and the second tab kept showing personal data.
+- **An expired session became a dead end.** On a failed refresh `apiFetch`
+  cleared the tokens and returned the 401; the caller rendered "Could not
+  load…" with a Retry that could only fail again. Nothing navigated, because
+  nothing knew.
+
+**The second falls out of the first.** Once `clearTokens()` notifies,
+`useRequireAuth` already does the right thing — it sees the session disappear
+and redirects. That is why `api-client` gains no routing code: it reports the
+truth about the session, and the hook that owns redirects reacts. Putting a
+`router.replace` inside the HTTP client would have coupled the transport to
+Next's router and made it untestable outside a component tree.
+
+The 401 is still *returned* rather than thrown, so an in-flight caller resolves
+normally instead of hanging mid-redirect. The consequence is a brief error
+state before the redirect lands — accepted, and far better than the dead end it
+replaces.
+
+**Alternatives considered**:
+
+- **Drop the cache entirely and read `localStorage` every time.** Simplest, and
+  the read is cheap. Rejected because the cache is also what lets this module
+  work outside a browser, which its header documents as deliberate.
+- **Trust `event.newValue` from the `storage` event** instead of invalidating
+  and re-reading. Rejected: it would give the store two sources of truth for no
+  gain, and `newValue` is null for a `clear()`.
