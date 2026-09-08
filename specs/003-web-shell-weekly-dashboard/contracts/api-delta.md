@@ -75,6 +75,9 @@ midnight and every workout logged for one day collides exactly.
 This is what the retired `before_id` design was for; the total order solves it
 for offset pagination too, and for any scheme adopted later.
 
+Supported by index `("user_id", "performed_at", "id")` — ascending, since the
+ordering is uniformly descending and a btree reads backwards.
+
 ### Query parameters
 
 | Parameter | Status | Meaning |

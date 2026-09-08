@@ -14,10 +14,19 @@ export enum WorkoutStatus {
   FAILED = 'failed',
 }
 
-// GET /workouts filters by userId and sorts/paginates by performedAt (T033) —
-// this composite index matches that access pattern exactly (Postgres can
-// scan it backwards for the DESC sort within a matching userId).
-@Index(['userId', 'performedAt'])
+// GET /workouts filters by userId and orders by performedAt DESC, id DESC —
+// the id tie-break makes the ordering total, which offset pagination requires
+// (specs/003 research #2). This composite index matches that access pattern
+// exactly.
+//
+// Ascending, with no per-column direction: TypeORM's @Index cannot express
+// DESC, and it does not need to. The ordering is uniformly descending, so
+// Postgres reads this btree backwards and the sort disappears entirely —
+// confirmed with EXPLAIN, which shows a bare `Index Scan Backward` here versus
+// an `Incremental Sort` on top when the index stops at performedAt. A DESC
+// index would only matter for a mixed-direction ORDER BY, and would put the
+// schema permanently out of step with what this decorator can declare.
+@Index(['userId', 'performedAt', 'id'])
 @Entity('workouts')
 export class Workout {
   @PrimaryColumn('uuid', { default: () => 'gen_random_uuid()' })

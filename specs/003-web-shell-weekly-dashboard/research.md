@@ -105,8 +105,8 @@ a single-user log with a few hundred workouts almost nothing, and its
 ## 3. Index for the total ordering
 
 **Decision**: Replace `IDX_e6a14b328d153b3050dd0773af` — currently
-`("user_id", "performed_at")` — with `("user_id", "performed_at" DESC, "id" DESC)`,
-in a new migration.
+`("user_id", "performed_at")` — with `("user_id", "performed_at", "id")`,
+ascending, in a new migration.
 
 **Rationale**: The existing index was added for exactly this read path
 (`AddIndexesForWorkoutReadPaths`). Now that the ordering ends in `id`
@@ -115,6 +115,14 @@ own and Postgres has to add a sort step on top. Carrying the tie-break column
 in matching order removes it. This is the only schema change in the feature,
 and it is needed whichever pagination scheme is used — it follows from the
 ordering, not from the cursor.
+
+**Ascending, not DESC**, though the ordering is `DESC, DESC`: a btree is
+readable in either direction, so a uniformly-descending sort is satisfied by an
+ascending index scanned backwards. Confirmed with `EXPLAIN` after applying it —
+`Index Scan Backward`, no sort node, where the two-column index left an
+`Incremental Sort` on top. Direction in an index only matters for a
+mixed-direction `ORDER BY`, and TypeORM's `@Index` cannot express one anyway,
+so a DESC index would guarantee permanent entity/schema divergence.
 
 **Alternatives considered**: Adding a second index and leaving the first —
 rejected; the new one is a strict superset for this query, and an unused

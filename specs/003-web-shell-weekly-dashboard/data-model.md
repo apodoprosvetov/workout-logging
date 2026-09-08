@@ -16,10 +16,18 @@ The only schema change in the feature.
 | --- | --- |
 | **Table** | `workouts` |
 | **Current** | `IDX_e6a14b328d153b3050dd0773af` on `("user_id", "performed_at")` |
-| **New** | same name-space, on `("user_id", "performed_at" DESC, "id" DESC)` |
+| **New** | `IDX_92387870c24d346a135a8c45d6` on `("user_id", "performed_at", "id")` — ascending; see below |
 | **Declared in** | `packages/shared/src/entities/workout.entity.ts` — the `@Index(['userId', 'performedAt'])` decorator gains `'id'` |
 | **Applied by** | a new migration under `packages/shared/src/db/migrations/` |
-| **Why** | the list's `ORDER BY` now ends in `id` to make it a total order; the index must carry both columns in that order so the sort is satisfied by the scan instead of added on top (research #2, #3) |
+| **Why** | the list's `ORDER BY` now ends in `id` to make it a total order; the index must carry that column so the sort is satisfied by the scan instead of added on top (research #2, #3) |
+
+**Ascending, not DESC.** The ordering is uniformly descending, so Postgres reads
+the btree backwards and needs no per-column direction. Measured with `EXPLAIN`
+on the real table: the two-column index leaves an `Incremental Sort` above the
+index scan; this one leaves a bare `Index Scan Backward`. A DESC index would
+matter only for a mixed-direction `ORDER BY`, and TypeORM's `@Index` cannot
+declare one — so it would also put the entity permanently out of step with the
+schema.
 
 `synchronize` is false in this project, so the migration is the only thing
 that changes the database — and it runs on every deploy already (spec 002's
