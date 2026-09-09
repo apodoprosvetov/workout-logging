@@ -63,22 +63,65 @@ surfaces, 1 new worker publish path, 1 new UI surface, 1 replaced web module.
 
 ## Constitution Check
 
-`.specify/memory/constitution.md` is **an unfilled template** — every principle
-is still a `[PRINCIPLE_N_NAME]` placeholder. There are no ratified gates to
-evaluate, so this check cannot pass or fail on project-defined criteria.
+Evaluated against `.specify/memory/constitution.md` **v1.0.0**, ratified
+2026-09-09 — after this plan was first written, so this section was revised to
+check against the real gates rather than the standing rules used originally.
 
-Applied instead, as the closest thing to standing rules in this project:
-
-| Rule | Source | Status |
+| Principle | Status | Evidence |
 |---|---|---|
-| Contract-test every new `apps/api` route | standing instruction | Planned — enumerated in [contracts/api.md](./contracts/api.md) |
-| `apps/web` never talks to datastores directly | spec 001 plan, restated in `api-client.ts` | Held — the client only consumes `/api/events` and REST |
-| One definition of a wire payload | existing `packages/shared/src/events/types.ts` | Held — notification shape lives in shared, used by producer and consumer |
-| Publish only after the state commits | `apps/worker/src/parser/handler.ts:48` | Held — see [contracts/events.md](./contracts/events.md) |
+| **I. Spec-Driven Change** | Pass | Spec states no transport or framework; all four transport/fan-out/auth/payload decisions were put to the maintainer before being made; `research.md` records rejected alternatives for each. The spec was amended when the in-flight-surface design invalidated US1, with the reason recorded in `checklists/requirements.md` — the "do not let the two drift" clause. |
+| **II. Verified Against Real Infrastructure** | Pass | `GET /api/events` and the changed `GET /workouts` filter have contract tests enumerated in [contracts/api.md](./contracts/api.md), running against real containers. The `apps/web` testing gate is closed — see below. |
+| **III. One Definition, Enforced Boundaries** | Pass | The notification envelope has one definition in `packages/shared`, compiled against by the `apps/worker` producer and the `apps/api` consumer. `apps/web` consumes only HTTP. No HTTP surface added to `apps/worker`. |
+| **IV. Events Durable, Notifications Not** | Pass | `analytics.updated` publishes only after the Redis pipeline commits, matching the existing parser rule. Notifications are explicitly best-effort and cannot fail the underlying change (FR-030, restated in [contracts/events.md](./contracts/events.md) §3). Thin payloads make duplicate and out-of-order delivery harmless (FR-020), which is idempotency by construction. |
+| **V. The Code Records Why** | Pass by obligation | An implementation-time duty, not a design property. Two findings in `research.md` MUST reach the code as comments citing their source: the 30s CloudFront default behind the 15s heartbeat (#9), and why fan-out avoids the RabbitMQ work exchange (#2). |
 
-**Recommendation**: the constitution is worth filling in via
-`/speckit-constitution` — four specs have now been planned without one. Not a
-blocker for this feature.
+**Operational Constraints**: all respected. The Redis Pub/Sub fan-out exists
+precisely because no design may assume a connection belongs to a given replica.
+The `?status` change is additive and backward compatible, so adjacent versions
+coexist during a rolling deploy. No new datastore and no paid AWS component —
+Redis is already in both compose files. `FR-029` covers structured logging, and
+the CDN's 30-second origin read timeout is named where it is relied upon, as the
+constraint requires.
+
+### Principle II gate — decision recorded
+
+The constitution requires a feature placing non-trivial logic in `apps/web` to
+decide explicitly whether to close the no-test-runner gap or accept it. This
+feature does place such logic there: SSE frame parsing across chunk boundaries,
+reconnect backoff, and the week-relevance rule that decides whether a
+notification concerns what is on screen.
+
+**Decision: close the gap.** `apps/web` gets `vitest`, and the logic above is
+written as pure modules and unit-tested.
+
+**Why this rather than accepting the gap**: the cost turned out to be near zero,
+which inverted the trade-off. `apps/worker` runs `vitest` with nothing but the
+dependency and a nine-line config (`environment: 'node'`, no plugins) — and
+that is a sufficient template here, because none of the logic in question
+touches React or the DOM. Frame parsing is a function from a byte stream to
+events; backoff is a function from an attempt number to a delay; week relevance
+is a function of two dates. No jsdom, no React Testing Library, no component
+rendering.
+
+That also means the mitigation that made "accept the gap" tempting — keep the
+logic in small pure functions — is not an alternative to testing it. It is the
+precondition that makes testing it cheap, so the plan adopts both.
+
+**Scope of the decision**: unit tests for pure logic only. Component behaviour,
+hooks, and rendering stay uncovered by automated tests and remain the job of the
+`quickstart.md` scenarios. Introducing DOM-level testing to this project is a
+larger question and is deliberately not settled here.
+
+**Concrete obligations** this places on `/speckit-tasks`:
+
+- Add `vitest` to `apps/web` devDependencies and a `test` script, so the root
+  `npm test` (`--workspaces --if-present`) picks it up with no other change.
+- Add `apps/web/vitest.config.ts` mirroring `apps/worker`'s, with the tsconfig
+  path aliases (`@services/*`, `@lib/*`, …) resolvable — or keep test imports
+  relative and skip alias configuration entirely.
+- Ship `event-stream.ts`'s parser and backoff as exported pure functions with
+  tests covering: an event split across two chunks, two events in one chunk,
+  a heartbeat comment line, a malformed frame, and backoff growth with a cap.
 
 ## Project Structure
 
@@ -130,13 +173,17 @@ apps/worker/src/
 apps/web/
 ├── services/
 │   ├── workout-events.ts      # REPLACED — same store shape, server-fed
-│   └── event-stream.ts        # NEW — fetch-based SSE reader, parser, backoff
+│   ├── event-stream.ts        # NEW — fetch-based SSE reader; parser + backoff
+│   │                          #       exported as pure functions
+│   └── event-stream.spec.ts   # NEW — unit tests for those pure functions
 ├── features/
 │   ├── in-flight/             # NEW — modal, list, dismiss, count badge
 │   ├── dashboard/             # settled-only filter; week-follow rule
 │   └── workouts/              # settled-only filter
-└── components/
-    └── log-workout-button.tsx # + in-flight count, opens the modal
+├── components/
+│   └── log-workout-button.tsx # + in-flight count, opens the modal
+├── vitest.config.ts           # NEW — mirrors apps/worker's (node env)
+└── package.json               # + vitest devDependency, + test script
 ```
 
 **Structure Decision**: existing monorepo layout, no new package. The shared
@@ -173,14 +220,16 @@ Stage 3 should be preceded by the `@Sse()`-on-Fastify spike (research #11).
 |---|---|---|
 | `@Sse()` behaves poorly on the Fastify adapter (flush, disconnect detection) | Blocks stage 3 | Spike first; fallback is writing to `reply.raw` in one controller |
 | An intermediary buffers the stream, so it works locally and not in production | Silent failure in prod only | Explicit `no-transform` / `X-Accel-Buffering` headers; quickstart scenario 5 runs against the real two-replica stack |
-| `apps/web` has no test runner, so the frame parser and backoff ship untested | Regressions land unnoticed in the trickiest code | Decide during `/speckit-tasks`: add vitest to `apps/web`, or accept manual coverage and keep the logic in small pure functions |
+| ~~`apps/web` has no test runner~~ **Retired** — resolved by the Principle II decision above: `vitest` is added and the parser/backoff ship as tested pure functions | — | — |
+| Path aliases (`@services/*`) may not resolve under vitest in `apps/web` | Test setup stalls on configuration rather than logic | Keep test imports relative; alias resolution is optional, not required |
 | Replacing `workout-events.ts` touches every list at once | Broad blast radius | Keep the store's shape (`revision` + `useSyncExternalStore`) so call sites change minimally |
 | Per-replica connection cap is not a global cap | A user could hold 2× the cap across replicas | Accepted — the goal is protecting a process from exhaustion, not exact accounting (research #10) |
 
 ## Complexity Tracking
 
-No constitution gates exist to violate, so this table records the one place the
-feature exceeds its literal brief instead.
+No constitutional principle is violated, so nothing here requires a governance
+justification. The table records the one place the feature exceeds its literal
+brief, which is a scope judgement rather than a gate breach.
 
 | Deviation | Why needed | Simpler alternative rejected because |
 |---|---|---|
@@ -188,7 +237,12 @@ feature exceeds its literal brief instead.
 
 ## Post-Design Constitution Re-check
 
-Unchanged from the pre-Phase-0 check: no ratified gates exist. The four standing
-rules above still hold after design — in particular, the notification payload
-has exactly one definition (`packages/shared`), and no new datastore was
-introduced, satisfying the spec's own deployment-reality assumption.
+Re-evaluated against v1.0.0 after Phase 1. Principles I, III, IV and V hold as
+recorded above; the Phase 1 artifacts strengthened rather than weakened them —
+the notification envelope ended up with a single definition used by both sides
+(III), and `contracts/events.md` §3 makes the best-effort publishing rule
+explicit at every producer rather than leaving it implied (IV).
+
+Principle II now passes as well: the `apps/web` testing gate was closed by
+adopting `vitest` there for pure logic (see the Constitution Check). **All five
+principles pass.** No entry in Complexity Tracking is a governance violation.

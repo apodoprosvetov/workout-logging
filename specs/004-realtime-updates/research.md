@@ -232,14 +232,24 @@ sweep, so a client that vanishes without a FIN does not leak an entry (FR-027).
 reconnect/backoff, and a manual end-to-end walkthrough in `quickstart.md` for
 the multi-session and interruption scenarios.
 
-**Rationale**: The standing instruction is to contract-test every new
+**Rationale**: Constitution Principle II requires a contract test for every new
 `apps/api` route, which covers `GET /api/events` and the changed `GET /workouts`
 filter. The parts hardest to get right — frame parsing across chunk boundaries,
 backoff, giving up — are pure functions of a byte stream and belong in unit
-tests. What cannot be automated cheaply here is genuine multi-replica behaviour:
-`apps/web` has no test runner configured at all, and the fan-out only exists
-with two replicas plus a worker. Those go in `quickstart.md` as scripted manual
-checks, consistent with how earlier specs verified infrastructure behaviour.
+tests.
+
+`apps/web` had no test runner at all, which Principle II treats as a gap a
+feature must explicitly close or accept. This feature closes it: `vitest` is
+added, mirroring `apps/worker`'s minimal setup (`environment: 'node'`, no
+plugins), because none of the logic above touches React or the DOM. The cost is
+a devDependency and a nine-line config — small enough that accepting the gap was
+the worse trade once measured. Scope is pure logic only; DOM-level testing
+remains a separate, unsettled question.
+
+What still cannot be automated cheaply is genuine multi-replica behaviour: the
+fan-out only exists with two replicas plus a worker. That goes in
+`quickstart.md` as a scripted manual check, consistent with how earlier specs
+verified infrastructure behaviour.
 
 **Note**: `@Sse()` in Nest is documented for both adapters, but this project runs
 Fastify (`apps/api/src/main.ts:14`) and the decorator's behaviour there —

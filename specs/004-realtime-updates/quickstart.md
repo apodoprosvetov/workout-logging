@@ -134,12 +134,16 @@ scoped wrongly.
 ```bash
 npm run test --workspace=apps/api      # contract tests (stop the dev worker first)
 npm run test --workspace=apps/worker   # publisher unit tests
+npm run test --workspace=apps/web      # SSE frame parser, backoff (NEW)
 npm run lint && npm run format:check
 ```
 
+Or `npm test` from the root, which runs all three.
+
 Contract tests are enumerated in [contracts/api.md](./contracts/api.md).
 
-`apps/web` has no test runner configured, so the client-side SSE frame parser
-and reconnect/backoff logic ship with unit tests only if one is added; otherwise
-scenarios 1 and 4 are their coverage. Worth deciding during `/speckit-tasks`
-rather than discovering at implementation time.
+`apps/web` gains a `vitest` setup with this feature (plan.md, Principle II
+decision). It covers **pure logic only** — frame parsing across chunk
+boundaries, backoff growth, week relevance. Component behaviour, hooks, and
+rendering have no automated coverage, so scenarios 1–6 above remain the way the
+UI itself is verified.
