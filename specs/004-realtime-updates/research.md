@@ -175,8 +175,9 @@ would expand this feature well past the update channel that motivates it.
 
 ## 7. The analytics recomputation announces nothing today
 
-**Decision**: Add `analytics.updated` to the shared event contracts, published by
-the analytics consumer after the Redis hash is written.
+**Decision**: The analytics consumer publishes an `analytics.updated` **change
+notification** directly to Redis after the weekly hash is written. No new
+RabbitMQ work event is introduced.
 
 **Rationale**: FR-002 cannot be satisfied otherwise. `workout.parsed` and
 `workout.deleted` already exist and are published
@@ -186,6 +187,21 @@ anyone (`apps/worker/src/analytics/handler.ts`). The notification must be
 published *after* the pipeline `exec()` commits, for the same reason the parser
 publishes only after its transaction commits — announcing a state that could
 still fail would race the client into refetching stale figures.
+
+**Corrected during `/speckit-analyze`**: the first draft of
+[contracts/events.md](./contracts/events.md) also defined `analytics.updated` as
+a durable RabbitMQ event on `workout.events`, consumed by nothing, "so the API
+layer can turn it into a Change Notification". That was wrong on three counts —
+it created a binding with no consumer, defined one concept twice with
+incompatible payloads (Constitution Principle III), and put a notification
+concern back on the work exchange, contradicting decision #2 in this very
+document. The worker publishes the notification directly, the way it already
+writes the hash directly.
+
+**Alternative considered**: routing the notification through RabbitMQ so the
+API layer consumes it rather than the worker publishing to Redis. Rejected for
+the reason in #2 — it is the same entanglement of ephemeral notification with
+durable work, arrived at from the other direction.
 
 ## 8. The list endpoint cannot express "settled"
 

@@ -13,40 +13,21 @@ Two distinct layers, deliberately not merged:
 Keeping notifications off the work exchange is research #2: an ephemeral UI
 concern must not become entangled with retry tiers and the DLQ.
 
----
+**This feature adds no new work event.** An earlier draft of this contract also
+defined `analytics.updated` as a durable RabbitMQ event, published to
+`workout.events` and consumed by nothing — existing only to be turned into a
+notification. That was struck: it created a binding with no consumer, gave one
+concept two incompatible payload definitions, and contradicted research #2 by
+putting a notification concern back on the work exchange. The analytics consumer
+publishes the notification directly, exactly as it already writes the Redis hash
+directly.
 
-## 1. New work event: `analytics.updated`
-
-- Routing key: `analytics.updated`
-- Exchange: `workout.events`
-- Published by: `apps/worker` analytics consumer, **after** the Redis pipeline
-  writing the weekly hash has `exec()`ed.
-- Consumed by: nothing on the work side. It exists so the API layer can turn it
-  into a Change Notification; a durable event keeps the producer honest about
-  ordering rather than having the worker reach into the notification layer.
-
-```json
-{
-  "event_id": "uuid",
-  "user_id": "uuid",
-  "iso_week": "2026-W37",
-  "occurred_at": "ISO 8601"
-}
-```
-
-**Why published after the commit**: announcing a recomputation that could still
-fail would race a client into refetching figures that were about to change
-again. Same reasoning already applied to `workout.parsed`, which is published
-only after its transaction commits (`apps/worker/src/parser/handler.ts:48-52`).
-
-**Note on `iso_week`**: carried rather than derived from a workout, because a
-deletion recomputes a week whose workout no longer exists — the analytics
-handler already faces this and solves it the same way
-(`WorkoutDeletedEvent.performed_at`).
+The three work events this feature relies on — `workout.uploaded`,
+`workout.parsed`, `workout.deleted` — already exist and are unchanged.
 
 ---
 
-## 2. Change Notification (Redis Pub/Sub)
+## 1. Change Notification (Redis Pub/Sub)
 
 ### Channel
 
@@ -157,9 +138,19 @@ can tell whether the removal affects the week on screen.
 The dashboard compares `iso_week` against the week it is showing and ignores
 anything else (FR-019).
 
+**Note on `iso_week`**: carried rather than derived from a workout, because a
+deletion recomputes a week whose workout no longer exists — the analytics
+handler already faces this and solves it the same way
+(`WorkoutDeletedEvent.performed_at`).
+
+**Published after the Redis pipeline commits**, never before: announcing a
+recomputation that could still fail would race a client into refetching figures
+that were about to change again. Same reasoning the parser already applies to
+`workout.parsed` (`apps/worker/src/parser/handler.ts:48-52`).
+
 ---
 
-## 3. Producer map
+## 2. Producer map
 
 | Notification | Produced by | Trigger |
 |---|---|---|
@@ -179,7 +170,7 @@ This mirrors the existing best-effort treatment of `markWorkoutFailed`
 
 ---
 
-## 4. Delivery to the browser
+## 3. Delivery to the browser
 
 The API replica holding a connection re-emits the notification verbatim as an
 SSE frame. The wire format is in [api.md](./api.md); the JSON body is exactly

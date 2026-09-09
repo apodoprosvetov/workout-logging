@@ -33,8 +33,8 @@ export + React 19 (`apps/web`), amqplib + TypeORM + Mongoose (`apps/worker`),
 **Storage**: No schema change. Postgres (`workouts`), Redis (weekly volume
 hashes; now also Pub/Sub), MongoDB/GridFS (raw uploads) all unchanged.
 
-**Testing**: `vitest` in `apps/api` and `apps/worker`. `apps/web` has **no test
-runner configured** — see Risks.
+**Testing**: `vitest` in `apps/api` and `apps/worker`, and newly in `apps/web`
+for pure logic — see the Principle II gate decision below.
 
 **Target Platform**: Browser client (static export on S3/CloudFront) against a
 containerised API on a single EC2 instance behind Caddy.
@@ -58,8 +58,10 @@ more than 10% (SC-010).
 - `apps/web` is a static export: no server runtime, so the browser talks to
   `/api` directly.
 
-**Scale/Scope**: Single-instance deployment, small user base. ~2 new API
-surfaces, 1 new worker publish path, 1 new UI surface, 1 replaced web module.
+**Scale/Scope**: Single-instance deployment, small user base. 1 new API route
+plus 1 changed query filter, 3 new worker publish sites (parser settled, parser
+failed, analytics recomputed), 2 new `apps/api` publish sites (workout created,
+deleted), 1 new UI surface, 1 replaced web module.
 
 ## Constitution Check
 
@@ -72,7 +74,7 @@ check against the real gates rather than the standing rules used originally.
 | **I. Spec-Driven Change** | Pass | Spec states no transport or framework; all four transport/fan-out/auth/payload decisions were put to the maintainer before being made; `research.md` records rejected alternatives for each. The spec was amended when the in-flight-surface design invalidated US1, with the reason recorded in `checklists/requirements.md` — the "do not let the two drift" clause. |
 | **II. Verified Against Real Infrastructure** | Pass | `GET /api/events` and the changed `GET /workouts` filter have contract tests enumerated in [contracts/api.md](./contracts/api.md), running against real containers. The `apps/web` testing gate is closed — see below. |
 | **III. One Definition, Enforced Boundaries** | Pass | The notification envelope has one definition in `packages/shared`, compiled against by the `apps/worker` producer and the `apps/api` consumer. `apps/web` consumes only HTTP. No HTTP surface added to `apps/worker`. |
-| **IV. Events Durable, Notifications Not** | Pass | `analytics.updated` publishes only after the Redis pipeline commits, matching the existing parser rule. Notifications are explicitly best-effort and cannot fail the underlying change (FR-030, restated in [contracts/events.md](./contracts/events.md) §3). Thin payloads make duplicate and out-of-order delivery harmless (FR-020), which is idempotency by construction. |
+| **IV. Events Durable, Notifications Not** | Pass | `analytics.updated` publishes only after the Redis pipeline commits, matching the existing parser rule. Notifications are explicitly best-effort and cannot fail the underlying change (FR-030, restated in [contracts/events.md](./contracts/events.md) §2). Thin payloads make duplicate and out-of-order delivery harmless (FR-020), which is idempotency by construction. |
 | **V. The Code Records Why** | Pass by obligation | An implementation-time duty, not a design property. Two findings in `research.md` MUST reach the code as comments citing their source: the 30s CloudFront default behind the 15s heartbeat (#9), and why fan-out avoids the RabbitMQ work exchange (#2). |
 
 **Operational Constraints**: all respected. The Redis Pub/Sub fan-out exists
@@ -148,8 +150,8 @@ specs/004-realtime-updates/
 ```text
 packages/shared/src/
 ├── events/
-│   ├── types.ts               # + ANALYTICS_UPDATED_ROUTING_KEY, AnalyticsUpdatedEvent
-│   ├── rabbitmq.ts            # + binding for analytics.updated
+│   ├── types.ts               # unchanged — no new work event (contracts/events.md)
+│   ├── rabbitmq.ts            # unchanged — no new queue or binding
 │   └── notifications.ts       # NEW — ChangeNotification union, channel-name helper
 └── db/redis.ts                # + a subscriber-mode client factory
 
@@ -194,33 +196,45 @@ follows the established `features/<domain>/` convention.
 
 ## Implementation Order
 
-Each stage is independently verifiable, and the first three deliver no
-user-visible change — deliberately, so the risky infrastructure is proven before
-any UI depends on it.
+**The executable ordering lives in [tasks.md](./tasks.md)** — seven phases,
+T001–T053. This section records only the reasoning behind that shape, so the two
+documents cannot drift into two different orders.
 
-1. **Notification contract** — the shared types and channel-name helper. No
-   behaviour.
-2. **Publish path** — producers emit notifications; verify with `redis-cli
-   PSUBSCRIBE 'user-events:*'` while using the app. Nothing consumes them yet.
-3. **`GET /api/events`** — the endpoint, registry, and subscriber. Verify with
-   `curl -N`. Contract tests land here, including cross-user isolation.
-4. **Client channel** — `event-stream.ts` and the replacement store. Screens
-   refetch on notification; no layout change yet. This is where US1 first
-   becomes demonstrable end to end.
-5. **Settled/in-flight split** — the `?status` change, the modal, the count
-   badge, the narrowed week-follow rule.
-6. **Hardening** — backoff, per-user cap, channel-status surfacing, the
-   quickstart scenarios that need two replicas.
+| Phase | What lands | User-visible? |
+|---|---|---|
+| 1. Setup | `vitest` in `apps/web`, the `@Sse()`-on-Fastify spike | no |
+| 2. Foundational | The channel: shared types, fan-out, `GET /api/events`, client reader, replacement store | no |
+| 3. US1 (MVP) | `workout.settled` publishes, the `?status` filter, the settled/in-flight split, the modal | **yes** |
+| 4–6. US2–US4 | Live analytics, multi-session agreement, interruption resilience | yes |
+| 7. Polish | Comments, structured logs, the quickstart scenarios including the SC-010 measurement | no |
 
-Stage 3 should be preceded by the `@Sse()`-on-Fastify spike (research #11).
+**Why phases 1–2 are deliberately user-invisible**: the risky parts — SSE under
+Fastify, cross-replica fan-out, auth on a connection that outlives its token —
+are proven with `curl` and contract tests before any UI depends on them. A
+failure there is a localized problem; the same failure found during phase 3 is
+entangled with UI work.
+
+**Why the publishes sit inside the story phases** rather than in one early
+batch: each story owns the notification it needs (`workout.settled` in US1,
+`analytics.updated` in US2, created/deleted in US3), which is what lets the
+stories ship independently. The notification *types* are all defined once in
+T004, so nothing is blocked by that split.
+
+**Why US1 is not demonstrable before phase 3 completes**: US1 *is* the
+settled/in-flight split. A settling workout updating in place inside a week list
+is the behaviour the amended spec removed, so there is no meaningful earlier
+milestone for it — the channel alone (phase 2) is verifiable with `curl`, not
+with a user journey.
+
+Phase 1's spike (T003) must precede T010: the endpoint's implementation shape
+depends on its outcome (research #11).
 
 ## Risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| `@Sse()` behaves poorly on the Fastify adapter (flush, disconnect detection) | Blocks stage 3 | Spike first; fallback is writing to `reply.raw` in one controller |
+| `@Sse()` behaves poorly on the Fastify adapter (flush, disconnect detection) | Blocks T010, the endpoint | Spike it in T003 first; fallback is writing to `reply.raw` in one controller |
 | An intermediary buffers the stream, so it works locally and not in production | Silent failure in prod only | Explicit `no-transform` / `X-Accel-Buffering` headers; quickstart scenario 5 runs against the real two-replica stack |
-| ~~`apps/web` has no test runner~~ **Retired** — resolved by the Principle II decision above: `vitest` is added and the parser/backoff ship as tested pure functions | — | — |
 | Path aliases (`@services/*`) may not resolve under vitest in `apps/web` | Test setup stalls on configuration rather than logic | Keep test imports relative; alias resolution is optional, not required |
 | Replacing `workout-events.ts` touches every list at once | Broad blast radius | Keep the store's shape (`revision` + `useSyncExternalStore`) so call sites change minimally |
 | Per-replica connection cap is not a global cap | A user could hold 2× the cap across replicas | Accepted — the goal is protecting a process from exhaustion, not exact accounting (research #10) |
@@ -240,7 +254,7 @@ brief, which is a scope judgement rather than a gate breach.
 Re-evaluated against v1.0.0 after Phase 1. Principles I, III, IV and V hold as
 recorded above; the Phase 1 artifacts strengthened rather than weakened them —
 the notification envelope ended up with a single definition used by both sides
-(III), and `contracts/events.md` §3 makes the best-effort publishing rule
+(III), and `contracts/events.md` §2 makes the best-effort publishing rule
 explicit at every producer rather than leaving it implied (IV).
 
 Principle II now passes as well: the `apps/web` testing gate was closed by

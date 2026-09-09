@@ -127,6 +127,38 @@ scoped wrongly.
    rendered UI. A notification that arrives and is filtered client-side is a
    **failure**: the channel is the boundary.
 
+## 7. Concurrent channels do not degrade the API (SC-010)
+
+The one success criterion that needs measurement rather than observation.
+
+1. **Baseline**: measure `GET /api/health` latency with no streams open — enough
+   samples for a stable median, e.g.
+
+   ```bash
+   for i in $(seq 50); do
+     curl -s -o /dev/null -w '%{time_total}\n' localhost:3000/api/health
+   done | sort -n | awk '{a[NR]=$1} END {print "median", a[int(NR/2)]}'
+   ```
+
+2. **Load**: open 200 concurrent `/api/events` connections with a throwaway Node
+   script — real tokens, spread across a handful of users so the per-user cap
+   (FR-028) does not reject them.
+3. **Measure again** with the streams held open.
+4. **Expect**: the median stays within 10% of baseline.
+5. **Expect**: memory does not climb while the connections merely idle — only
+   heartbeats are flowing.
+6. Close all 200 and **expect** the connection registry to empty (FR-027).
+   A registry that stays populated after every client is gone is the leak this
+   check exists to catch.
+
+**Record the actual numbers** in this file when the check is run. If the 10%
+target is missed, raise it as a finding — SC-010 is a claim about the system, so
+moving the number to match the measurement would defeat the point of having it.
+
+**Note**: run this against the two-replica stack if you want the number that
+matters in production; a single dev process gives a useful lower bound but not
+the real figure.
+
 ---
 
 ## Automated coverage
