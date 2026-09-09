@@ -33,14 +33,43 @@ The scope here is the channel and the screen behaviour it enables: the system
 telling an open screen that something it is displaying has changed, so the
 screen can show the current truth on its own.
 
+### Where an unprocessed workout belongs
+
+This feature also settles a question the current design left ambiguous: *where*
+a workout lives while it is still being processed.
+
+Today an unprocessed workout sits in the ordinary workout lists, and this
+already produces a visible contradiction on the dashboard — the weekly list
+counts a not-yet-processed workout as part of the week, while the volume chart
+beside it does not. The two panels describe the same week differently.
+
+It also creates a harder problem once updates become live. Background
+processing may move a workout's date: when the user did not state a date, the
+parser adopts one it finds in the submitted text. A workout that is displayed
+inside a week can therefore leave that week without the user doing anything —
+forcing a choice between silently removing a row and navigating the user away
+from the week they were reading. Both are bad, and neither is necessary.
+
+So the lists and the dashboard show only **settled** workouts — those whose
+processing has finished, successfully or with items needing review. Workouts
+still being processed, and those that failed, live in a dedicated in-flight
+surface reachable from the same place the user logs a workout. A workout enters
+the ordinary lists at the moment it settles, and never moves between weeks while
+on display.
+
+This is what makes the rest of the feature coherent: an unsettled workout is
+never shown inside a week, so a date discovered during processing can never
+disturb a week the user is reading.
+
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - A logged workout finishes processing on screen (Priority: P1)
+### User Story 1 - Watching a logged workout land (Priority: P1)
 
-A user logs a workout and stays on the page. The entry appears immediately in a
-not-yet-processed state. Moments later, without touching anything, the entry
-resolves in place: it shows the exercises and sets that were extracted from what
-they submitted, and its status is no longer pending.
+A user logs a workout. It appears immediately in the in-flight surface, shown as
+still being processed, so they can see the system has it. They can close that
+surface and carry on. When processing finishes, the workout leaves the in-flight
+surface on its own and appears among their settled workouts, with the exercises
+and sets that were extracted from what they submitted.
 
 **Why this priority**: This is the gap that makes the product feel broken. It is
 the one moment where the user is actively waiting for the system, and today the
@@ -48,30 +77,38 @@ system gives them nothing to wait on. Delivered alone, it removes the only
 mandatory page reload in the core flow and is a complete, demonstrable
 improvement.
 
-**Independent Test**: Log a workout on an open screen and do nothing else.
-Without any user action — no reload, no navigation, no click — the entry must
-change from its pending state to its resolved state and show the extracted
-exercise detail.
+**Independent Test**: Log a workout and do nothing else. Without any user action
+— no reload, no navigation, no click — it must move out of the in-flight surface
+and become visible among the settled workouts with its extracted exercise
+detail.
 
 **Acceptance Scenarios**:
 
-1. **Given** a user is viewing their workout history with a just-logged workout
-   showing as not-yet-processed, **When** background processing finishes
-   successfully, **Then** that entry updates in place to its processed state
-   with its exercise detail visible, without the user reloading or navigating.
-2. **Given** a user is viewing the dashboard with a just-logged workout in the
-   current week's list, **When** background processing finishes, **Then** the
-   dashboard's list reflects the processed entry without a reload.
-3. **Given** a user is viewing a workout that is still processing, **When**
-   processing fails permanently, **Then** the entry updates on screen to a
-   failed state that tells the user the workout could not be read, rather than
-   remaining pending forever.
-4. **Given** a workout resolves to a state needing review, **When** the update
-   arrives, **Then** the entry shows that reviewable state rather than a
-   successful one.
-5. **Given** an entry updates in place, **When** the user was scrolled down or
-   had a different entry expanded, **Then** their scroll position and expanded
-   entry are preserved.
+1. **Given** a user has just logged a workout, **When** they look at the
+   in-flight surface, **Then** that workout is listed there as still being
+   processed, and it is absent from the dashboard and the workout history.
+2. **Given** a workout is listed as processing in the in-flight surface, **When**
+   background processing finishes successfully, **Then** it disappears from that
+   surface and appears in the workout history and in its week on the dashboard,
+   without the user reloading or navigating.
+3. **Given** the user is watching the in-flight surface after logging a workout,
+   **When** that workout settles into a week other than the one the dashboard is
+   showing, **Then** the dashboard moves to the week it landed in, so the user
+   can see where it went.
+4. **Given** a workout settles to a state needing review, **When** it leaves the
+   in-flight surface, **Then** it appears among the settled workouts marked as
+   needing review, not as fully processed.
+5. **Given** a workout is being processed, **When** processing fails
+   permanently, **Then** it remains in the in-flight surface marked as failed,
+   with an explanation, rather than disappearing or staying "processing" forever.
+6. **Given** a failed workout is in the in-flight surface, **When** the user
+   dismisses it, **Then** it is discarded and the surface stops reporting it.
+7. **Given** the user has closed the in-flight surface, **When** workouts of
+   theirs are still being processed, **Then** the control that opens the surface
+   shows how many, so the work is never invisible.
+8. **Given** a workout settles, **When** the user was scrolled down or had an
+   entry expanded, **Then** their scroll position and expanded entry are
+   preserved.
 
 ---
 
@@ -133,9 +170,14 @@ other reflects it without being touched.
    they delete a workout in one tab, **Then** it disappears from the other tab
    without a reload.
 2. **Given** the same user has the app open on two devices, **When** a workout
-   logged on one finishes processing, **Then** both devices show the processed
-   entry.
-3. **Given** two different users each have the app open, **When** one user's
+   logged on one finishes processing, **Then** both devices show it among the
+   settled workouts.
+3. **Given** a workout logged on one device settles into a week that a *second*
+   device is not showing, **When** the update arrives, **Then** the second device
+   does not change week — only the session that logged the workout may follow it.
+4. **Given** the same user has the app open in two tabs, **When** a workout of
+   theirs is being processed, **Then** both tabs report it as in flight.
+5. **Given** two different users each have the app open, **When** one user's
    workout is processed, **Then** the other user's screen shows no change and
    receives nothing about it.
 
@@ -185,12 +227,23 @@ data without user action.
   has a fetch in flight for the same data. The older response must not overwrite
   the newer one. (The existing screens already guard against out-of-order
   responses; this feature must not defeat that.)
-- **Update for data not on screen**: a workout in a week the dashboard is not
-  showing, or on a page of history the user has not scrolled to, is processed.
-  The screen must not be disrupted and must not silently jump.
-- **Deleted while processing**: a workout is deleted before its processing
-  finishes. The screen must not resurrect the deleted entry when the processing
-  update arrives.
+- **Update for data not on screen**: a workout settles into a week the dashboard
+  is not showing, or onto a page of history the user has not scrolled to. The
+  screen must not be disrupted and must not silently jump.
+- **Deleted while processing**: a workout is deleted or dismissed before its
+  processing finishes. The screen must not resurrect it when the processing
+  update arrives, and the in-flight surface must not keep reporting it.
+- **Processing outlives the session**: a workout is still in flight when the user
+  signs out or closes the app. On returning, the in-flight surface must reflect
+  its true current state — settled and in the lists, or still processing, or
+  failed — never a stale copy of what was in flight last time.
+- **Date discovered during processing**: processing assigns the workout a date in
+  a different week from the one implied at logging. Because it was never
+  displayed inside a week, no week on screen may change as a result — except the
+  logging session following it, per the story above.
+- **Nothing in flight**: the user has no workouts being processed. The in-flight
+  surface must be reachable and state plainly that there is nothing in progress,
+  rather than appearing broken or empty without explanation.
 - **Expired session**: the user's credentials expire while the channel is open.
   The channel must re-authenticate or close cleanly, never keep delivering a
   user's data on credentials that are no longer valid.
@@ -220,8 +273,11 @@ data without user action.
   created or deleted, so screens other than the one that made the change reflect
   it.
 - **FR-004**: A notification MUST identify what changed with enough precision
-  for a screen to decide whether it is displaying the affected data — at minimum,
-  which workout, and which week's figures.
+  for a screen to decide whether it is displaying the affected data *without
+  fetching anything first* — at minimum, which workout, which week's figures,
+  and, for a workout, the date it now carries. The date is required because
+  processing may assign one, and a screen must be able to tell whether the
+  workout concerns the week it is showing.
 - **FR-005**: The system MUST deliver a user's notifications only to sessions
   authenticated as that user. A user MUST NOT receive any notification about
   another user's data, including its existence.
@@ -235,47 +291,75 @@ data without user action.
   so a screen can obtain current data independently of what any notification
   carried.
 
+**Where workouts are shown**
+
+- **FR-009**: The dashboard's weekly list and the workout history MUST show only
+  settled workouts — those whose processing has finished, whether fully or with
+  items needing review. Workouts still being processed, and those that failed,
+  MUST NOT appear there.
+- **FR-010**: The set of workouts the lists show MUST match the set the weekly
+  volume figures are computed from, so the two never describe a week differently.
+- **FR-011**: The system MUST provide an in-flight surface listing the user's
+  workouts that are being processed or have failed, reachable from every screen
+  that offers the logging action.
+- **FR-012**: A workout MUST appear in exactly one of the two places at any time
+  — the in-flight surface or the settled lists — and MUST move from the first to
+  the second at the moment it settles, without user action.
+- **FR-013**: While the in-flight surface is closed, the control that opens it
+  MUST indicate how many of the user's workouts are in flight, so in-progress
+  and failed work is never invisible.
+- **FR-014**: A failed workout MUST remain in the in-flight surface, described in
+  terms the user can act on, until the user dismisses it. Dismissing MUST
+  discard the workout.
+- **FR-015**: The in-flight surface MUST state plainly when nothing is in
+  progress.
+
 **Screen behaviour**
 
-- **FR-009**: On being notified that data it is displaying has changed, a screen
+- **FR-016**: On being notified that data it is displaying has changed, a screen
   MUST bring itself up to date without user action.
-- **FR-010**: Updating a screen MUST preserve what the user has chosen: the week
+- **FR-017**: Updating a screen MUST preserve what the user has chosen: the week
   the dashboard is on, the page of history they are viewing, their scroll
   position, and any entry they have expanded.
-- **FR-011**: A screen MUST ignore notifications about data it is not currently
+- **FR-018**: An update MUST NOT navigate the user. The single exception: the
+  session that logged a workout MAY move the dashboard to the week that workout
+  settled into. No other session may change week in response to it.
+- **FR-019**: A screen MUST ignore notifications about data it is not currently
   displaying.
-- **FR-012**: Concurrent and repeated notifications MUST leave a screen in the
+- **FR-020**: Concurrent and repeated notifications MUST leave a screen in the
   same state as the last change alone would have — updates must be safe to
   apply more than once and safe to arrive out of order.
-- **FR-013**: A screen MUST NOT lose or discard user input in progress — a
+- **FR-021**: A screen MUST NOT lose or discard user input in progress — a
   partially filled logging form in particular — when an update arrives.
 
 **Resilience**
 
-- **FR-014**: A dropped channel MUST be re-established automatically, without
+- **FR-022**: A dropped channel MUST be re-established automatically, without
   the user reloading, and repeated failures MUST back off rather than retry in a
   tight loop.
-- **FR-015**: After a channel is re-established, the screen MUST reflect changes
-  that occurred while it was down.
-- **FR-016**: The channel MUST survive an idle period with no changes — it MUST
+- **FR-023**: After a channel is re-established, the screen MUST reflect changes
+  that occurred while it was down — including workouts that settled during the
+  outage, which MUST have left the in-flight surface.
+- **FR-024**: The channel MUST survive an idle period with no changes — it MUST
   NOT be silently closed by inactivity in a way that leaves a screen believing it
   is still receiving updates.
-- **FR-017**: A screen MUST be able to distinguish "connected and current" from
+- **FR-025**: A screen MUST be able to distinguish "connected and current" from
   "not receiving updates", and MUST NOT present stale data as live.
-- **FR-018**: If the channel cannot be established, every screen MUST remain
-  fully usable and MUST still show correct data on load, navigation, and reload.
+- **FR-026**: If the channel cannot be established, every screen MUST remain
+  fully usable and MUST still show correct data on load, navigation, and reload,
+  and the in-flight surface MUST still show the true current state when opened.
   Real-time delivery is an enhancement; loss of it MUST NOT be a failure state.
-- **FR-019**: The system MUST NOT retain undelivered notifications indefinitely
+- **FR-027**: The system MUST NOT retain undelivered notifications indefinitely
   for a session that is gone or not consuming them.
-- **FR-020**: The system MUST limit how many concurrent channels a single user
+- **FR-028**: The system MUST limit how many concurrent channels a single user
   can hold, so one user cannot exhaust capacity for others.
 
 **Operability**
 
-- **FR-021**: The system MUST record enough about channel lifecycle and delivery
+- **FR-029**: The system MUST record enough about channel lifecycle and delivery
   — connections opened and closed, notifications published and dropped — to
   diagnose "the user says their screen did not update" after the fact.
-- **FR-022**: Delivery of a notification MUST NOT be able to fail the underlying
+- **FR-030**: Delivery of a notification MUST NOT be able to fail the underlying
   change: if a workout is processed but the notification cannot be delivered, the
   processing MUST still be considered complete and durable.
 
@@ -283,10 +367,15 @@ data without user action.
 
 - **Change Notification**: An announcement that some piece of a specific user's
   data has changed. Identifies the owning user, what kind of change occurred
-  (workout status resolved, workout created, workout deleted, weekly figures
-  recomputed), and which data it concerns (the workout, the week). Carries a
+  (workout settled, workout created, workout deleted, weekly figures recomputed),
+  and which data it concerns — the workout, its current date, the week. Carries a
   time of occurrence and an identity that lets a recipient recognise a repeat.
-  It is a pointer to what changed, not a replacement for the data itself.
+  It is a pointer to what changed, not a replacement for the data itself; it
+  carries only what a screen needs to judge relevance without fetching first.
+- **In-flight surface**: The user's view of their own workouts that have not
+  settled — those still being processed, and those that failed and have not been
+  dismissed. Reachable wherever logging is offered, and summarised by a count
+  while closed. A workout leaves it by settling or by being dismissed.
 - **Update Channel**: A live connection between one authenticated session and
   the system, over which that user's Change Notifications are delivered. Belongs
   to exactly one user, has a lifetime bounded by the session's validity, and can
@@ -297,32 +386,40 @@ data without user action.
 
 ### Measurable Outcomes
 
-- **SC-001**: A workout's processing outcome becomes visible on an already-open
-  screen within 3 seconds of the system finishing it, in 95% of cases, with no
-  user action.
+- **SC-001**: A workout leaves the in-flight surface and becomes visible among
+  the settled workouts within 3 seconds of the system finishing its processing,
+  in 95% of cases, with no user action.
 - **SC-002**: Recomputed weekly volume figures become visible on an open
   dashboard showing that week within 3 seconds of the recomputation, in 95% of
   cases.
 - **SC-003**: A user completing the log-a-workout journey end to end — submit,
   wait, see the extracted exercises — needs zero page reloads, down from one
   today.
-- **SC-004**: A change made in one of a user's open sessions is visible in their
+- **SC-004**: The dashboard's weekly list and its volume figures describe the
+  same set of workouts 100% of the time, including while a workout of that week
+  is being processed — an inconsistency that occurs today.
+- **SC-005**: No workout is ever displayed inside a week it does not belong to,
+  and no week on screen changes its contents because processing assigned a
+  workout a different date.
+- **SC-006**: A change made in one of a user's open sessions is visible in their
   other open sessions within 3 seconds.
-- **SC-005**: After a connectivity interruption of up to 5 minutes, an open
+- **SC-007**: After a connectivity interruption of up to 5 minutes, an open
   screen shows current data within 10 seconds of connectivity returning, with no
   change from the interruption left permanently invisible.
-- **SC-006**: A screen left idle for 30 minutes still receives the next change
+- **SC-008**: A screen left idle for 30 minutes still receives the next change
   within the SC-001 window.
-- **SC-007**: With the update channel entirely unavailable, 100% of the app's
+- **SC-009**: With the update channel entirely unavailable, 100% of the app's
   primary journeys — sign in, log a workout, browse history, view the dashboard
-  — still complete successfully.
-- **SC-008**: The system sustains at least 200 concurrent update channels
+  — still complete successfully, and the in-flight surface still reports the true
+  state when opened.
+- **SC-010**: The system sustains at least 200 concurrent update channels
   without degrading the response times of ordinary requests beyond 10% of their
   baseline.
-- **SC-009**: No user ever receives a notification concerning another user's
+- **SC-011**: No user ever receives a notification concerning another user's
   data — verified by test, and zero occurrences in operation.
-- **SC-010**: Zero workouts are left displayed as permanently pending on an open
-  screen after their processing has reached a terminal outcome.
+- **SC-012**: Zero workouts remain in the in-flight surface after their
+  processing has reached a terminal outcome, other than failed ones the user has
+  not yet dismissed.
 
 ## Assumptions
 
@@ -332,6 +429,18 @@ data without user action.
   local changes and server-pushed changes reach screens the same way. Spec 003
   anticipated exactly this ("this module is the single place that gets
   replaced").
+- **Settled means parsed or needs-review.** These are exactly the statuses the
+  weekly volume computation already counts, so aligning the lists with that
+  predicate is what makes FR-010 hold rather than a new rule invented here.
+- **A failed workout is discarded, not retried.** Dismissing it deletes it, and
+  the user logs the workout again if they still want it. Re-submitting the
+  original text or image for another parsing attempt is a separate feature with
+  its own value, deliberately not bundled here — see Out of Scope.
+- **Only the logging session follows a workout to its week.** Spec 003's FR-012
+  (the dashboard switches to the week a logged workout belongs to) is narrowed to
+  the session that performed the logging, and applies when the workout settles
+  rather than when it is submitted. Any other session treats a settling workout
+  like any other change: refresh in place, never navigate.
 - **Updates apply automatically rather than being offered.** When a screen is
   notified, it updates itself; it does not show a "new data available, click to
   refresh" prompt. This follows the precedent already set in spec 003's
@@ -382,3 +491,10 @@ data without user action.
   about anyone else's data.
 - A durable, replayable per-user event history surviving long offline periods.
 - Optimistic rendering of processing results before the system has produced them.
+- **Retrying a failed workout.** The submitted text or image is still stored, so
+  re-running the parse is feasible and worth doing — but it needs its own way to
+  re-submit work, its own attempt limit, and its own view of repeated failure.
+  Bundling it here would expand this feature past the update channel that
+  motivates it. Failed workouts are dismissible (FR-014) so the user is never
+  stuck; recovering them is the next increment.
+- Editing or correcting a workout that came back needing review.
