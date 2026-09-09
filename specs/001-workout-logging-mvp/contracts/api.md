@@ -106,6 +106,18 @@ because the database may order tied rows differently for each page's query.
   or doesn't exist — never confirm existence of another user's data.
 - 200: `{ id, name, status, source, performed_at, exercises: [{ name, order, sets: [{ order, weight, reps, unit }] }] }`
 
+### `DELETE /workouts/:id`
+- Auth required. 404 (not 403) for another user's workout or a nonexistent one,
+  same as `GET /workouts/:id` — a delete must not reveal what a read would not.
+- 400 for a malformed (non-UUID) id.
+- Removes the workout with its exercises and sets in one transaction. The shared
+  `exercises` catalog is never touched.
+- 204, no body.
+- **Publishes `workout.deleted`** once the transaction commits
+  ([events.md](./events.md)). This is the only thing that invalidates the
+  weekly-volume cache for the affected week — without it the dashboard keeps
+  reporting the deleted workout's volume until the cache's own TTL expires.
+
 ### `GET /analytics/weekly-volume`
 - Auth required. Scoped to caller.
 - Query: `?week=YYYY-Www` (ISO week, week 01–53; default current) — 400 on a

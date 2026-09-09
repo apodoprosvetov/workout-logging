@@ -5,6 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  connectRabbitMq,
   createTypeOrmDataSource,
   Exercise,
   SetUnit,
@@ -13,6 +14,8 @@ import {
   WorkoutSet,
   WorkoutSource,
   WorkoutStatus,
+  WORKOUT_DELETED_ROUTING_KEY,
+  WORKOUT_EVENTS_EXCHANGE,
 } from '@workout-logging/shared';
 
 import { AuthModule } from '../../src/auth/auth.module';
@@ -204,5 +207,55 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
       sets: 0,
       exercises: 1,
     });
+  });
+
+  it('publishes workout.deleted carrying the week the workout belonged to', async () => {
+    // Nothing else invalidates the weekly-volume cache: the analytics worker only
+    // recomputes on an event, so without this the dashboard keeps reporting a
+    // deleted workout's volume for up to the cache TTL (120 days).
+    //
+    // Read from our own exclusive queue bound to the same routing key, not from
+    // workout.analytics.q — a dev worker consuming that queue would win the race
+    // and this test would fail on any machine running `npm run dev`.
+    const conn = await connectRabbitMq();
+    const channel = await conn.createChannel();
+    const { queue: probe } = await channel.assertQueue('', { exclusive: true });
+    await channel.bindQueue(probe, WORKOUT_EVENTS_EXCHANGE, WORKOUT_DELETED_ROUTING_KEY);
+
+    try {
+      const workoutId = await seedWorkout(userId);
+      const performedAt = (
+        await request(httpServer(app))
+          .get(`/api/workouts/${workoutId}`)
+          .set('authorization', `Bearer ${accessToken}`)
+      ).body.performed_at as string;
+
+      const res = await request(httpServer(app))
+        .delete(`/api/workouts/${workoutId}`)
+        .set('authorization', `Bearer ${accessToken}`);
+      expect(res.status).toBe(204);
+
+      // The publish is fire-and-forget from the request's perspective — give the
+      // broker a beat to route it, as ingestion.service.spec.ts does.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const msg = await channel.get(probe);
+      if (!msg) throw new Error('expected a workout.deleted event');
+      const event = JSON.parse(msg.content.toString()) as Record<string, unknown>;
+
+      // `type` is what the consumer discriminates on — see the note on
+      // WorkoutDeletedEvent. It must be in the body, because the routing key is
+      // rewritten to workout.parsed if the message ever goes through a retry.
+      expect(event.type).toBe('workout.deleted');
+      expect(event.workout_id).toBe(workoutId);
+      expect(event.user_id).toBe(userId);
+      // The whole point: the consumer cannot look this up, the row is gone.
+      expect(event.performed_at).toBe(performedAt);
+      expect(typeof event.event_id).toBe('string');
+      expect(typeof event.occurred_at).toBe('string');
+      channel.ack(msg);
+    } finally {
+      await channel.close();
+      await conn.close();
+    }
   });
 });
