@@ -40,6 +40,12 @@ caching disabled for `/api/*` already
 (`infra/terraform/cloudfront.tf:104`), so this is belt-and-braces for Caddy and
 any future proxy.
 
+**These headers must not be set by hand.** Nest's `@Sse()` emits all of them
+itself — the exact `Cache-Control` it sends is `private, no-cache, no-store,
+must-revalidate, max-age=0, no-transform`. Adding `@Header()` decorators for
+them produces duplicates on the wire, confirmed by the T003 spike
+(research #12).
+
 **Frames**
 
 Each notification is one SSE event whose `data` is the JSON envelope from
@@ -56,10 +62,11 @@ either. The blank line terminating each frame is required by the SSE format.
 
 **Heartbeat**
 
-An SSE comment every 15 seconds while otherwise idle:
+A named event every 15 seconds while otherwise idle:
 
 ```
-: ping
+event: heartbeat
+data:
 
 ```
 
@@ -68,6 +75,13 @@ Non-negotiable: CloudFront sets no `origin_read_timeout`
 between packets and an idle stream is cut without this (research #9). The client
 also uses it as its liveness signal — no traffic for more than two intervals
 means the channel is not healthy regardless of what the socket reports (FR-025).
+
+*A named event rather than the bare SSE comment (`: ping`) this contract
+originally specified*: Nest's `@Sse()` cannot emit a comment line — it
+serializes a `MessageEvent`, so even empty data yields `data: ` — verified by
+the T003 spike (research #12). The purpose is unaffected, since what defeats the
+idle timeout is bytes on the wire; and the client can now recognise the
+heartbeat explicitly instead of relying on comment handling.
 
 **Status codes**
 

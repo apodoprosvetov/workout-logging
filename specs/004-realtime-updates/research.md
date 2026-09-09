@@ -267,8 +267,57 @@ fan-out only exists with two replicas plus a worker. That goes in
 `quickstart.md` as a scripted manual check, consistent with how earlier specs
 verified infrastructure behaviour.
 
-**Note**: `@Sse()` in Nest is documented for both adapters, but this project runs
-Fastify (`apps/api/src/main.ts:14`) and the decorator's behaviour there —
-particularly flushing and client-disconnect detection — should be confirmed by a
-spike before the endpoint is built out. If it misbehaves, the fallback is
-writing to `reply.raw` directly, which is a contained change to one controller.
+---
+
+## 12. `@Sse()` on Fastify — spike result (T003)
+
+**Decision**: Use Nest's `@Sse()`. The `reply.raw` fallback is not needed.
+
+Measured with a throwaway standalone Nest + Fastify app (no database, so the
+result is about SSE and nothing else), on the versions this repo pins.
+
+| Question | Result |
+|---|---|
+| Does `@Sse()` work on the Fastify adapter? | Yes — boots and streams |
+| Are frames flushed immediately, or buffered? | **Immediate.** First frame arrived at **7 ms**; a 500 ms emitter produced frames at 509/1011/1512/2013 ms. `Transfer-Encoding: chunked`, no batching |
+| Is client disconnect observable? | **Yes.** Killing `curl` ran the Observable's teardown function server-side, twice out of two attempts |
+
+The disconnect result is the one that mattered most: it means the connection
+registry can drop an entry from the teardown callback, with no periodic sweep —
+exactly what FR-027 asks for.
+
+### Three findings that change T010
+
+1. **Nest already sets every header the contract requires.** `@Sse()` emits
+   `Content-Type: text/event-stream`, `Connection: keep-alive`,
+   `X-Accel-Buffering: no`, and `Cache-Control: private, no-cache, no-store,
+   must-revalidate, max-age=0, no-transform` on its own. Adding `@Header()` for
+   these — as the spike did, to test whether they coexist — produces **duplicate
+   `Cache-Control` and `X-Accel-Buffering` headers** on the wire. So T010 must
+   *not* set them manually.
+
+2. **`@Sse()` cannot emit a bare SSE comment.** The heartbeat was specified as
+   `: ping`. There is no way to produce that: the decorator serializes a
+   `MessageEvent`, and an empty `data` still yields `data: ` plus an
+   auto-assigned `id:`. Raw wire output from the spike:
+
+   ```
+   event: heartbeat\nid: 2\ndata: \n\n
+   ```
+
+   The heartbeat therefore becomes a named event rather than a comment. This is
+   cosmetic for its actual purpose — bytes on the wire inside CloudFront's 30 s
+   window (#9) — and arguably better, since the client can recognise it
+   explicitly instead of relying on comment handling. `contracts/api.md` has
+   been corrected.
+
+3. **Every frame gets an auto-incrementing `id:`.** Nest assigns them; there is
+   no opt-out short of dropping `@Sse()`. Harmless here — the client is
+   `fetch`-based (#3) and ignores them — but worth knowing, because a native
+   `EventSource` would echo the last one back as `Last-Event-ID`, which this
+   design does not honour.
+
+**Alternative rejected**: writing to `reply.raw` directly. It would allow a true
+comment heartbeat and suppress the auto-`id`, but both are cosmetic, and it
+would mean hand-rolling the framing and header handling that `@Sse()` gets right
+already.
