@@ -33,8 +33,8 @@ Monorepo with npm workspaces: `packages/shared/`, `apps/api/`, `apps/worker/`,
 **Purpose**: Close the Principle II gate and de-risk the one unverified
 technical assumption before anything depends on it.
 
-- [ ] T001 Add `vitest` to devDependencies and a `"test": "vitest run"` script in `apps/web/package.json` so the root `npm test` (`--workspaces --if-present`) picks it up
-- [ ] T002 [P] Create `apps/web/vitest.config.ts` mirroring `apps/worker/vitest.config.ts` (`environment: 'node'`, `globals: true`, include `**/*.spec.ts`); no jsdom or React Testing Library — this covers pure logic only
+- [X] T001 Add `vitest` to devDependencies and a `"test": "vitest run --passWithNoTests"` script in `apps/web/package.json` so the root `npm test` (`--workspaces --if-present`) picks it up. The flag matches `apps/worker`'s existing script and keeps the root run green until T016 lands the first test
+- [X] T002 [P] Create `apps/web/vitest.config.mts` mirroring `apps/worker/vitest.config.ts` (`environment: 'node'`, `globals: true`, include `**/*.spec.ts`); no jsdom or React Testing Library — this covers pure logic only. `.mts` rather than `.ts`, and `vite-tsconfig-paths` added: see the config's own comments for both reasons
 - [ ] T003 Spike `@Sse()` under the Fastify adapter in `apps/api`: verify frames flush immediately and client disconnect is observable. Record the outcome in `specs/004-realtime-updates/research.md` #11. If it misbehaves, the fallback is writing to `reply.raw` in the controller — decide here, before T010
 
 **Checkpoint**: `npm test --workspace=apps/web` runs (vacuously), and the SSE
