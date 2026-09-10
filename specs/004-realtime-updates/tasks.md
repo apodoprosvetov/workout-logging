@@ -51,7 +51,7 @@ reader. No notification content flows yet; each user story adds its own.
 
 ### Shared contracts
 
-- [ ] T004 Define the `ChangeNotification` discriminated union (`workout.settled`, `workout.created`, `workout.deleted`, `analytics.updated`) and the per-user channel-name helper in `packages/shared/src/events/notifications.ts`, matching [contracts/events.md](./contracts/events.md) §1 exactly — snake_case wire fields
+- [X] T004 Define the `ChangeNotification` discriminated union (`workout.settled`, `workout.created`, `workout.deleted`, `analytics.updated`) and the per-user channel-name helper in `packages/shared/src/events/notifications.ts`, matching [contracts/events.md](./contracts/events.md) §1 exactly — snake_case wire fields
 - [ ] T005 Export the new module from `packages/shared/src/index.ts`
 - [ ] T006 [P] Add a subscriber-mode Redis client factory to `packages/shared/src/db/redis.ts` — a separate connection, since ioredis forbids other commands on a subscribed client
 

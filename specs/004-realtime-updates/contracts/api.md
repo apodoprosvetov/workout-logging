@@ -53,7 +53,7 @@ Each notification is one SSE event whose `data` is the JSON envelope from
 
 ```
 event: workout.settled
-data: {"type":"workout.settled","event_id":"…","user_id":"…","workout_id":"…","status":"parsed","performed_at":"2026-09-07","occurred_at":"…"}
+data: {"type":"workout.settled","event_id":"…","user_id":"…","workout_id":"…","status":"parsed","performed_at":"2026-09-07T00:00:00.000Z","occurred_at":"…"}
 
 ```
 

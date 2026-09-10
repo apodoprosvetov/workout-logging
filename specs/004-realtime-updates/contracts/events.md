@@ -69,7 +69,7 @@ transition that moves it between the two UI surfaces.
   "user_id": "uuid",
   "workout_id": "uuid",
   "status": "parsed | needs_review | failed",
-  "performed_at": "2026-09-07",
+  "performed_at": "2026-09-07T00:00:00.000Z",
   "occurred_at": "ISO 8601"
 }
 ```
@@ -79,6 +79,20 @@ transition that moves it between the two UI surfaces.
   a dashboard decide whether this concerns the week on screen without fetching
   (FR-004), and it is what makes the parser's date change followable at all —
   the limitation `apps/web/services/workout-events.ts` documents as out of reach.
+- **A full ISO 8601 timestamp, not a calendar date.** An earlier draft of this
+  contract wrote `"2026-09-07"`, which would have put the same field in two
+  formats: `GET /workouts` already serialises it as
+  `w.performedAt.toISOString()` (`apps/api/src/workouts/workouts.service.ts:57`,
+  `:85`), and the existing `WorkoutDeletedEvent.performed_at` is a full
+  timestamp too. A client comparing a notification against a workout it already
+  holds would have needed two conversion paths for one field.
+- A **string** on the wire, never a `Date`. The value crosses `JSON.stringify` →
+  Redis → `JSON.parse`, and a `Date` does not survive that round trip — it comes
+  back as a string, so a `Date`-typed field would lie to every subscriber.
+  The established pattern in this project is `Date` in the domain
+  (`workout.entity.ts:76`, `timestamptz`), a string on the wire, and
+  `new Date(...)` at the consuming boundary
+  (`apps/worker/src/analytics/handler.ts:54`).
 - The **previous** date is not carried. A screen showing the old week already
   holds the workout and matches on `workout_id`; a screen showing the new week
   never had it.
@@ -96,7 +110,7 @@ Sent when a workout row is created, so a user's *other* sessions learn about it
   "event_id": "uuid",
   "user_id": "uuid",
   "workout_id": "uuid",
-  "performed_at": "2026-09-07",
+  "performed_at": "2026-09-07T00:00:00.000Z",
   "occurred_at": "ISO 8601"
 }
 ```
@@ -115,7 +129,7 @@ are the same operation.
   "event_id": "uuid",
   "user_id": "uuid",
   "workout_id": "uuid",
-  "performed_at": "2026-09-07",
+  "performed_at": "2026-09-07T00:00:00.000Z",
   "occurred_at": "ISO 8601"
 }
 ```
