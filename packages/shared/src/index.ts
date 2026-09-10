@@ -1,4 +1,6 @@
 export * from './events/types';
+export * from './events/notifications';
+export * from './events/redis-pubsub';
 export * from './schemas';
 export * from './entities';
 export * from './db/typeorm';

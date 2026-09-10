@@ -152,8 +152,14 @@ packages/shared/src/
 ├── events/
 │   ├── types.ts               # unchanged — no new work event (contracts/events.md)
 │   ├── rabbitmq.ts            # unchanged — no new queue or binding
-│   └── notifications.ts       # NEW — ChangeNotification union, channel-name helper
-└── db/redis.ts                # + a subscriber-mode client factory
+│   ├── notifications.ts       # NEW — ChangeNotification union, channel-name helper
+│   │                          #       no runtime deps, so apps/web can use it
+│   └── redis-pubsub.ts        # NEW — subscriber-mode connection factory.
+│                              #       Here, not db/redis.ts: Redis is a
+│                              #       transport in this role, so it belongs
+│                              #       beside rabbitmq.ts
+└── db/redis.ts                # unchanged — still the cache client; the new
+                               # factory imports redisUrl from it
 
 apps/api/src/
 ├── events/

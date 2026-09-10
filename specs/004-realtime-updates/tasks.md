@@ -52,8 +52,8 @@ reader. No notification content flows yet; each user story adds its own.
 ### Shared contracts
 
 - [X] T004 Define the `ChangeNotification` discriminated union (`workout.settled`, `workout.created`, `workout.deleted`, `analytics.updated`) and the per-user channel-name helper in `packages/shared/src/events/notifications.ts`, matching [contracts/events.md](./contracts/events.md) §1 exactly — snake_case wire fields
-- [ ] T005 Export the new module from `packages/shared/src/index.ts`
-- [ ] T006 [P] Add a subscriber-mode Redis client factory to `packages/shared/src/db/redis.ts` — a separate connection, since ioredis forbids other commands on a subscribed client
+- [X] T005 Export the new module from `packages/shared/src/index.ts`
+- [X] T006 [P] Add a subscriber-mode Redis client factory — a separate connection, since ioredis forbids other commands on a subscribed client. **Landed in `packages/shared/src/events/redis-pubsub.ts`, not `db/redis.ts` as originally written**: here Redis is a transport, not a datastore, so it belongs beside `events/rabbitmq.ts` where this repo already keeps its message-transport connection factory. `redisUrl` is imported from `db/redis.ts` rather than re-resolved, keeping one definition of `REDIS_URL`. Kept out of `notifications.ts` so the notification types stay free of a runtime dependency (they are needed in `apps/web` at T015/T019). Exported from the barrel
 
 ### API: fan-out and endpoint
 
