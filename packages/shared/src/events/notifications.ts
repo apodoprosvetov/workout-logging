@@ -75,11 +75,34 @@ export type ChangeNotification =
   | WorkoutDeletedNotification
   | AnalyticsUpdatedNotification;
 
+// The channel format is defined here once, and read back here too — see
+// getUserIdFromEventsChannel below. A subscriber that recovered the user id by
+// splitting the string itself would be a second place that knows the format,
+// and the two would drift silently: adding a segment (an environment, a
+// version) would update this builder while the splitter kept returning the
+// wrong piece, routing notifications to a user that does not exist. No error,
+// no crash, just nobody receiving anything.
+const EVENTS_CHANNEL_PREFIX = 'user-events:';
+
 // One channel per user — and the channel name *is* the authorization boundary
 // (FR-005): a subscriber only ever receives the users it asked for, so a leak
 // across users would take a wrong channel name, not a missed filter. The colon
 // follows the Redis namespacing this project already uses for
 // `weekly_volume:{userId}:{isoWeek}`.
 export function getEventsChannelName(userId: string): string {
-  return `user-events:${userId}`;
+  return `${EVENTS_CHANNEL_PREFIX}${userId}`;
+}
+
+/**
+ * Recover the user id from a channel name, or `null` if it is not one of ours.
+ *
+ * The inverse of `getEventsChannelName`, deliberately kept beside it. Returns
+ * `null` rather than a best guess so a caller subscribed to something
+ * unexpected drops the message instead of delivering it to whoever the string
+ * happened to parse into.
+ */
+export function getUserIdFromEventsChannel(channel: string): string | null {
+  if (!channel.startsWith(EVENTS_CHANNEL_PREFIX)) return null;
+  const userId = channel.slice(EVENTS_CHANNEL_PREFIX.length);
+  return userId.length > 0 ? userId : null;
 }

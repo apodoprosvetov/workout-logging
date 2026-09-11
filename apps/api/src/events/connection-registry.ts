@@ -18,6 +18,25 @@ export interface ConnectionSlot {
 /**
  * The SSE connections this replica is holding, per user.
  *
+ * **Nothing calls this directly except NotificationsSubscriber.** It is
+ * bookkeeping, not a service other code reaches for; the subscriber owns the
+ * Redis connection and therefore owns the decisions about when to touch this.
+ * Kept a separate class only so these properties — the cap, the leak, the
+ * transitions — can be exercised with no Redis and no Nest lifecycle.
+ *
+ * When each method runs, which is the part that is easy to get backwards:
+ *
+ * ```
+ * client opens GET /api/events  → subscriber.openStream()  → register()
+ * client disconnects (teardown) → subscriber.closeStream() → unregister()
+ * worker publishes to Redis     → subscriber.handleMessage() → broadcast()
+ * ```
+ *
+ * The first two run once per HTTP connection. The third runs once per incoming
+ * message, no matter how many connections are open. `broadcast` never
+ * registers anything — a message arriving is not a client arriving, and
+ * conflating the two creates streams nobody is listening to.
+ *
  * Deliberately per-replica and not shared: it describes sockets owned by *this*
  * process, which no other replica can write to. Caddy round-robins across
  * api-1 and api-2 (infra/Caddyfile), so each holds its own disjoint set — the
@@ -63,6 +82,32 @@ export class ConnectionRegistry {
     userStreams.add(stream);
 
     return { stream, isFirstForUser: userStreams.size === 1 };
+  }
+
+  /**
+   * Push an event into every stream this replica holds for one user, and return
+   * how many received it.
+   *
+   * The fan-out lives here rather than handing the set out through a getter:
+   * the set stays private, so nothing outside can add a stream and slip past
+   * the cap that `register` enforces. It also keeps "a user's notifications
+   * reach only that user's streams" (FR-005) verifiable in one place.
+   *
+   * A return of 0 is normal, not an error — with two replicas, a user's
+   * connections may all live on the other one, and a notification with no
+   * listener is simply dropped (FR-027).
+   */
+  broadcast(userId: string, event: MessageEvent): number {
+    const userStreams = this.registry.get(userId);
+    if (!userStreams) return 0;
+
+    // Iterate a copy: `next()` can synchronously run a subscriber's teardown,
+    // which calls unregister() and mutates this very set mid-iteration. Same
+    // hazard the web client already documents in services/workout-events.ts.
+    const streams = [...userStreams];
+    for (const stream of streams) stream.next(event);
+
+    return streams.length;
   }
 
   /**
