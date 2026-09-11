@@ -65,9 +65,9 @@ reader. No notification content flows yet; each user story adds its own.
 
 ### API: contract tests
 
-- [ ] T012 [P] Contract test in `apps/api/tests/contract/events.auth.spec.ts`: no token → 401; expired token → 401; valid token → 200 with `text/event-stream` and the documented cache/buffering headers
-- [ ] T013 [P] Contract test in `apps/api/tests/contract/events.delivery.spec.ts`: a notification published for user A reaches A's stream, and **nothing** reaches user B's stream (FR-005, SC-011) — assert on the raw stream, not on rendered state
-- [ ] T014 [P] Contract test in `apps/api/tests/contract/events.limits.spec.ts`: opening past the per-user cap returns 429, and closing a stream frees a slot
+- [X] T012 [P] Contract test in `apps/api/tests/contract/events.auth.spec.ts`: no token → 401; expired token → 401; valid token → 200 with `text/event-stream` and the documented cache/buffering headers
+- [X] T013 [P] Contract test in `apps/api/tests/contract/events.delivery.spec.ts`: a notification published for user A reaches A's stream, and **nothing** reaches user B's stream (FR-005, SC-011) — assert on the raw stream, not on rendered state
+- [X] T014 [P] Contract test in `apps/api/tests/contract/events.limits.spec.ts`: opening past the per-user cap returns 429, and closing a stream frees a slot. All three share `tests/helpers/sse.ts` — supertest buffers until a response ends, which an SSE response never does, so these hold a real socket open instead. That is also the only way to assert what a *second* connection does **not** receive
 
 ### Web: the channel client
 
