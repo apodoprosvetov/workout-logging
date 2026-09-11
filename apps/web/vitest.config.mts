@@ -4,8 +4,8 @@
 // Loading it that way fails with 'resolved to an ESM file. ESM file cannot be
 // loaded by `require`'. The `.mts` extension forces ESM for this one file
 // without changing how anything else in apps/web is treated.
-import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
