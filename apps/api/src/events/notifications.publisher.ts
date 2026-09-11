@@ -1,8 +1,9 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
-import { REDIS_CLIENT } from 'src/redis/redis.module';
 
 import { ChangeNotification, getEventsChannelName } from '@workout-logging/shared';
+
+import { REDIS_CLIENT } from '../redis/redis.module';
 
 @Injectable()
 export class NotificationsPublisher {
