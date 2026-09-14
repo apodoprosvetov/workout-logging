@@ -2,6 +2,9 @@
 
 import { useSyncExternalStore } from 'react';
 
+import { loadTokens, subscribeToSession } from './api-client';
+import { startEventStream } from './event-stream';
+
 // Carries "a workout was just logged" from the header's logging form
 // (components/log-workout-form.tsx) to whatever lists happen to be mounted:
 // the dashboard's weekly list and volume chart, and the full history on
@@ -58,14 +61,23 @@ const INITIAL: WorkoutLogSnapshot = Object.freeze({ revision: 0, lastPerformedAt
 let snapshot: WorkoutLogSnapshot = INITIAL;
 const listeners = new Set<() => void>();
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
+let stopStream: (() => void) | null = null;
+let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
-function getSnapshot(): WorkoutLogSnapshot {
+// The store subscribes to the session, never the other way round: api-client
+// owns tokens and must not know a notification channel exists. Reversing this
+// also creates an import cycle, since the channel reaches apiFetch.
+subscribeToSession(() => {
+  if (!loadTokens()) {
+    closeChannel();
+  } else if (listeners.size > 0) {
+    // Signing back in: consumers are already mounted, so `subscribe` will not
+    // fire again and nothing would reopen the channel until a page reload.
+    openChannel();
+  }
+});
+
+export function getSnapshot(): WorkoutLogSnapshot {
   return snapshot;
 }
 
@@ -74,6 +86,69 @@ function getSnapshot(): WorkoutLogSnapshot {
 // initial snapshot keeps hydration from observing a change that never happened.
 function getServerSnapshot(): WorkoutLogSnapshot {
   return INITIAL;
+}
+
+/**
+ * The `useSyncExternalStore` subscribe half — exported alongside `getSnapshot`
+ * because together they *are* this store's contract; `useWorkoutLog` is only a
+ * convenience wrapper over them. Exported rather than kept private so the
+ * store's behaviour can be exercised without a DOM: this project deliberately
+ * runs no jsdom or component rendering (plan.md, the Principle II decision).
+ */
+export function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  if (listeners.size === 1) {
+    openChannel();
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      closeChannel();
+    }
+  };
+}
+
+function publish(lastPerformedAt: string | null): void {
+  snapshot = Object.freeze({ revision: snapshot.revision + 1, lastPerformedAt });
+  // Iterate a copy: a listener may unsubscribe (or a component may mount and
+  // subscribe) while React processes the notification.
+  for (const listener of [...listeners]) listener();
+}
+
+/**
+ * A change that arrived over the notification channel — from the worker, or
+ * from this user's other tab or device.
+ *
+ * `lastPerformedAt` stays null on purpose. That field drives the dashboard's
+ * week switch (FR-012), and a workout logged on another device must never pull
+ * this screen to its week — FR-018 and US3 scenario 3 forbid exactly that. Only
+ * the session that performed the logging may follow it.
+ */
+function publishRemote(): void {
+  publish(null);
+}
+
+function openChannel(): void {
+  if (closeTimer) {
+    clearTimeout(closeTimer);
+    closeTimer = null;
+  }
+
+  if (stopStream) return;
+
+  stopStream = startEventStream({
+    onNotification: () => publishRemote(),
+  });
+}
+
+function closeChannel(): void {
+  // React unmounts the old page's consumers before mounting the new page's, so
+  // the count dips to zero on every navigation. Closing immediately would tear
+  // the stream down and rebuild it on each route change.
+  closeTimer = setTimeout(() => {
+    stopStream?.();
+    stopStream = null;
+  }, 1000);
 }
 
 /**
@@ -106,13 +181,6 @@ export function publishWorkoutLogged(performedAt: string): void {
  */
 export function publishWorkoutDeleted(): void {
   publish(null);
-}
-
-function publish(lastPerformedAt: string | null): void {
-  snapshot = Object.freeze({ revision: snapshot.revision + 1, lastPerformedAt });
-  // Iterate a copy: a listener may unsubscribe (or a component may mount and
-  // subscribe) while React processes the notification.
-  for (const listener of [...listeners]) listener();
 }
 
 /**
