@@ -9,6 +9,8 @@ export * from './db/gridfs';
 export * from './db/redis';
 export * from './events/rabbitmq';
 export * from './db/idempotency';
+export * from './db/returning';
+export * from './db/workouts.repository';
 export * from './db/pg-errors';
 export * from './rate-limit';
 export * from './log';

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   deleteWorkoutImages,
   getRetryAttempt,
@@ -5,18 +7,19 @@ import {
   RawUploadDocument,
   RETRY_ATTEMPT_HEADER,
   retryQueueForAttempt,
-  Workout,
   WorkoutStatus,
   WorkoutUploadedEvent,
   WORKOUT_DLQ,
   WORKOUT_PARSE_QUEUE,
+  WORKOUT_SETTLED_KEY,
+  workoutsRepository,
 } from '@workout-logging/shared';
 
 import { log } from '../logger.js';
+import { publishNotification } from '../notifications.js';
 
 import type { WorkerContext } from '../index.js';
 import type { ConsumeMessage } from 'amqplib';
-import type { DataSource } from 'typeorm';
 
 export { getRetryAttempt };
 
@@ -26,20 +29,6 @@ export { getRetryAttempt };
 // 5s/30s/5m of re-attempts + a DLQ hop for something that will never succeed
 // is pure log noise.
 export class NonRetryableParseError extends Error {}
-
-// Guarded transition, mirrored from handler.ts: only a still-pending workout
-// moves to failed, so a redelivered duplicate can't stomp a terminal status.
-export async function markWorkoutFailed(dataSource: DataSource, workoutId: string): Promise<void> {
-  await dataSource
-    .createQueryBuilder()
-    .update(Workout)
-    .set({ status: WorkoutStatus.FAILED })
-    .where('id = :id AND status = :pendingStatus', {
-      id: workoutId,
-      pendingStatus: WorkoutStatus.PENDING,
-    })
-    .execute();
-}
 
 // research.md #3: 3 retry attempts (5s/30s/5m) before workout.dlq + marking the
 // workout failed. Routes into the next retry tier (T017's topology) rather than
@@ -76,7 +65,21 @@ export async function handleParseFailure(
     });
     context.channel.sendToQueue(WORKOUT_DLQ, msg.content, { persistent: true });
     try {
-      await markWorkoutFailed(context.dataSource, event.workout_id);
+      const settled = await workoutsRepository(context.dataSource).markFailed(event.workout_id);
+
+      // null means the guard skipped the update — the workout had already left
+      // `pending`, so it has been announced once and must not be announced again.
+      if (settled) {
+        await publishNotification(context.redis, {
+          type: WORKOUT_SETTLED_KEY,
+          event_id: randomUUID(),
+          user_id: settled.userId,
+          occurred_at: new Date().toISOString(),
+          workout_id: event.workout_id,
+          status: WorkoutStatus.FAILED,
+          performed_at: settled.performedAt.toISOString(),
+        });
+      }
     } catch (err) {
       // Best-effort per contracts/events.md — the DLQ message is still the
       // source of truth for manual recovery even if this write fails too.
