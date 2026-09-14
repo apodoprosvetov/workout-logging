@@ -71,10 +71,10 @@ reader. No notification content flows yet; each user story adds its own.
 
 ### Web: the channel client
 
-- [ ] T015 [P] Implement the SSE frame parser as an exported pure function (bytes/string chunks → parsed events, handling frames split across chunks, several frames per chunk, and `:` comment lines) in `apps/web/services/event-stream.ts`
-- [ ] T016 [P] Unit-test the parser in `apps/web/services/event-stream.spec.ts`: event split across two chunks; two events in one chunk; heartbeat comment ignored; malformed frame discarded without killing the stream
-- [ ] T017 [P] Implement backoff as an exported pure function (attempt → delay, growth with a cap) in `apps/web/services/event-stream.ts` and unit-test growth and capping in `apps/web/services/event-stream.spec.ts`
-- [ ] T018 Implement the stream reader in `apps/web/services/event-stream.ts`: open via `apiFetch` so the `Authorization` header and refresh-on-401 are reused, consume `response.body`, dispatch parsed events, and reopen on close — a 15-minute access token makes reconnection routine, not exceptional
+- [X] T015 [P] Implement the SSE frame parser as an exported pure function (bytes/string chunks → parsed events, handling frames split across chunks, several frames per chunk, and `:` comment lines) in `apps/web/services/event-stream.ts`. Returns `SseFrame` (`{ event, data }` as text), **not** `ChangeNotification`: a heartbeat is a frame but not a notification, and `JSON.parse` throws — a pure function has no good answer to that, while the reader in T018 does. Purity is kept by threading the carry-over explicitly (`rest` in, `buffer` out) rather than holding a buffer in a closure. LF only; the docblock records why CRLF is out and how it would fail
+- [X] T016 [P] Unit-test the parser in `apps/web/services/event-stream.spec.ts`: event split across two chunks; two events in one chunk; heartbeat ignored; malformed frame discarded without killing the stream. **Written before T015** so the interface was decided by what callers need. 22 tests. Note the task text above predates T003: the heartbeat is a named event, not a `:` comment — both are covered. One case replays a verbatim `curl -N` capture from the running API, including the bare leading `\n` that `@Sse()` opens with, which a naive split turns into a phantom frame
+- [X] T017 [P] Implement backoff as an exported pure function (attempt → delay, growth with a cap) in `apps/web/services/event-stream.ts` and unit-test growth and capping in `apps/web/services/event-stream.spec.ts`. Sequence `0, 250, 500, 1000, 2000, 4000, 5000…` — attempt 0 is immediate on purpose: the commonest reconnect here is not a failure but the 15-minute access token expiring, and charging a delay for that would cost every user a gap every 15 minutes. The caller must therefore reset the counter on a successful connection. The 5 s ceiling is set by SC-007, not taste: after a 5-minute outage the client sits at the ceiling, so the delay alone must leave room inside the 10 s recovery budget. Jitter is deliberately absent — T042 adds it on top, keeping this function pure and its tests free of a stubbed generator
+- [X] T018 Implement the stream reader in `apps/web/services/event-stream.ts`: open via `apiFetch` so the `Authorization` header and refresh-on-401 are reused, consume `response.body`, dispatch parsed events, and reopen on close — a 15-minute access token makes reconnection routine, not exceptional. Returns a stop function **synchronously**, so a caller has something to hold before the first connection resolves. Decoding goes through `pipeThrough(new TextDecoderStream())` rather than a hand-held `TextDecoder`, which makes forgetting `{ stream: true }` structurally impossible — without it a chunk boundary landing mid-character splits a Cyrillic exercise name into replacement chars and the JSON then fails to parse. `response.ok` is checked before reading, so the 429/503 distinction T010 builds is not thrown away by reading an error body as if it were a stream. **What clears the backoff is how long a connection lasted, not whether it opened**: an earlier draft reset on connect, and a behavioural test caught it reopening 123 times in 150 ms against a server that accepts and immediately closes — precisely the tight loop FR-022 forbids. Heartbeat frames get their own `onHeartbeat` hook as a seam for T043
 - [ ] T019 Replace `apps/web/services/workout-events.ts` with a server-fed store: same external-store shape (`revision` + `useSyncExternalStore`) so existing call sites change minimally, now fed by both stream events and locally originated changes
 - [ ] T020 [P] Unit-test the store's convergence properties in `apps/web/services/workout-events.spec.ts` (FR-020): the same `event_id` delivered twice leaves the same end state as delivering it once, and two notifications applied in either order converge on the same state. Thin payloads make this true by construction — the test exists so a future change that starts carrying data cannot break it silently
 
@@ -188,6 +188,53 @@ converges within ~10s. Quickstart scenario 4.
 
 ---
 
+## Phase 8: Ingest durability
+
+**Why this is in *this* spec**: `IngestionService.ingest` performs four writes
+across three systems — GridFS, `raw_uploads`, the `workouts` row, then a
+RabbitMQ publish — with no atomicity between them. That predates this feature,
+but this feature is what makes the worst case visible. A workout whose
+`workout.uploaded` publish is lost never reaches a terminal status, so before
+spec 004 it sat in a list wearing a grey badge, and after it sits in the
+in-flight modal **forever** — which SC-012 forbids ("zero workouts remain in
+the in-flight surface after processing has reached a terminal outcome").
+
+The publish is not merely untransactional, it is unconfirmed:
+`rabbitmq-publisher.service.ts:18` uses `createChannel()` rather than
+`createConfirmChannel()`, and `publish()` is synchronous and returns `void`. A
+dropped connection loses the event with no exception raised anywhere.
+
+**Three increments, deliberately overlapping.** Each is useful alone; together
+they are defence in depth. They can ship independently of the user stories.
+
+### Increment 1 — compensating action (closes both failure halves, cheaply)
+
+- [ ] T054 Switch `apps/api/src/events/rabbitmq-publisher.service.ts` to `createConfirmChannel()` and make `publish()` async and awaited, so a broker that never acknowledges raises instead of silently dropping. Note this alone makes things *worse* without T055: the workout row is already saved when the publish fails, so a client retry would create a duplicate
+- [ ] T055 Wrap the write sequence in `apps/api/src/workouts/ingestion.service.ts` so a failure after the Mongo writes deletes what it created (GridFS blobs, the `raw_uploads` doc, the `workouts` row) and returns `503`. The user then sees either "it worked" or "it failed" — never a half-written workout. **This is a compensating action, not a saga**: one method drives the whole sequence and its undo, with no second participant and no messages between steps. If anything, that makes it orchestration; the project's actual choreography is `workout.uploaded → parser → workout.parsed → analytics`, where nobody holds the overall picture
+- [ ] T056 Integration test in `apps/api/tests/integration/ingestion.service.spec.ts`: with the publish forced to fail, no `workouts` row, no `raw_uploads` doc and no GridFS blob survive, and the caller gets `503`. Decide and record what happens when the compensation *itself* fails — logging and accepting the orphan is a legitimate answer, but it must be a stated one
+
+### Increment 2 — transactional outbox (turns "almost always" into a guarantee)
+
+- [ ] T057 Add an `outbox` table (event id, routing key, payload, `occurred_at`, `published_at`) plus its entity and a TypeORM migration under `packages/shared/src/db/migrations/`, following the existing `<timestamp>-<Name>.ts` convention
+- [ ] T058 In `ingestion.service.ts`, write the `workouts` row and the outbox row inside **one Postgres transaction**, and stop publishing from the request path. This is what Constitution Principle IV asks for almost verbatim — "an event that drives work MUST be published only after the state it describes has committed" — made structurally impossible to violate rather than merely observed
+- [ ] T059 Add a relay that reads unpublished outbox rows, publishes them with confirms (T054), and marks them sent. At-least-once delivery is already safe here: `withEventIdempotency` and the `processed_events` table exist, so consumers tolerate duplicates — this is half the usual cost of an outbox, already paid by spec 001
+- [ ] T060 Integration test: with RabbitMQ stopped, `POST /workouts` still succeeds and the row lands in `outbox`; once the broker returns, the relay publishes it and the workout parses. This is the guarantee T054/T055 cannot give — there, a broker outage means the request fails
+
+### Increment 3 — reconciliation sweep (the net under both)
+
+- [ ] T061 Add a periodic sweep that finds `pending` workouts older than a chosen threshold and re-publishes `workout.uploaded` for them. Duplicates are harmless (see T059). Choose the threshold against the parser's real latency, not a round number, and record the reasoning
+- [ ] T062 Integration test: a workout left `pending` past the threshold gets re-published exactly once per sweep and reaches a terminal status; one inside the threshold is left alone
+
+**What Increment 2 makes redundant**: T058 removes the publish from the request
+path, so T055's publish-failure branch becomes dead code and should be deleted
+then. The Mongo-orphan half of T055 stays — an outbox spans one database, not
+two, and nothing about it helps if the Postgres transaction fails after the
+GridFS write. Doing these in order means knowingly writing something that is
+later partly removed; that is accepted here because each increment is meant to
+stand on its own and to be readable as one idea.
+
+---
+
 ## Dependencies
 
 **Phase order**: Setup → Foundational → US1 → US2 → US3 → US4 → Polish.
@@ -200,6 +247,9 @@ converges within ~10s. Quickstart scenario 4.
 - T018/T019 block every story's client-side reaction.
 - T019 blocks T020 — the convergence test asserts on the store it creates.
 - T052 (SC-010 measurement) needs the whole channel working, so it runs last; against the two-replica stack if the production figure is wanted.
+- T054 blocks T055 — the compensation has nothing to react to until a failed publish actually raises.
+- T057 blocks T058, which blocks T059. T059 supersedes T055's publish branch.
+- Phase 8 depends on none of the user stories and none of them depend on it. It can ship before, after, or between them; only SC-012's honesty depends on it landing eventually.
 - T024 blocks T025, which blocks T027, T028, T029.
 - T017 (pure backoff) blocks T042 (applying it).
 - T031 (dismiss) and T039 (`workout.deleted` publish) touch the same delete path — sequence them.

@@ -104,6 +104,13 @@ jobs:
           NEXT_PUBLIC_API_URL: /api
         run: |
           npm ci
+          # apps/web type-checks against packages/shared's emitted .d.ts (it
+          # imports the notification types with `import type`, so nothing of
+          # shared reaches the bundle — but `next build` still runs tsc, and
+          # tsc needs dist/ to exist). Locally this is invisible: `predev`
+          # builds shared, so dist/ is always already there. On a fresh
+          # checkout it is not, and the build fails with TS2307.
+          npm run build --workspace=@workout-logging/shared
           npm run build --workspace=@workout-logging/web
 
       - name: Sync to S3
