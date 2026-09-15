@@ -1,3 +1,24 @@
+# Datastore majors are pinned, and none of them is the newest release. That was
+# never a decision — the four tags came in with the first commit and nothing has
+# revisited them since. Recording it here so the next reader does not have to
+# rediscover that there was no reason, and so a bump is planned rather than
+# attempted as a one-line edit:
+#
+#   postgres  a major upgrade rewrites the on-disk catalog, so it needs
+#             pg_dump/restore or pg_upgrade against the EBS data volume, not a
+#             new tag. The riskiest of the four for data.
+#   rabbitmq  4 changes defaults and retires mechanisms the TTL-based retry
+#             tiers lean on (packages/shared/src/events/rabbitmq.ts). The
+#             riskiest for behaviour: the failure would be a message quietly not
+#             retried, which nothing here would notice.
+#   mongo     supports upgrading one major at a time; straightforward.
+#   redis     holds nothing worth keeping — the weekly-volume cache rebuilds
+#             from Postgres on a miss and Pub/Sub is not persisted. Cheapest.
+#
+# Upgrading deserves its own spec with its own verification, not a side errand
+# during feature work. Keep this file and infra/docker-compose.prod.yml on the
+# same versions — a local/production split here would make every "works on my
+# machine" report unanswerable.
 services:
   postgres:
     image: postgres:16-alpine
