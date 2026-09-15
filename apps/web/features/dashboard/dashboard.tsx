@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useRequireAuth } from '@hooks/use-require-auth';
-import { formatDayMonth, weekRangeForOffset, weeksAgoForDate } from '@lib/analytics';
+import { formatDayMonth } from '@lib/display/date-display';
+import { weekRangeForOffset, weeksAgoForDate } from '@lib/weeks';
 import { useWorkoutLog } from '@services/workout-events';
 
 import { VolumeChart } from './volume-chart';

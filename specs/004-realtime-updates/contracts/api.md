@@ -140,7 +140,7 @@ it without a custom parser.
 
 | Endpoint | Why it matters now |
 |---|---|
-| `GET /workouts/:id` | The refetch target when a `workout.settled` notification concerns an expanded row. |
+| `GET /workouts/:id` | The refetch target when a `workout.settled` notification concerns the workout whose detail page is open. |
 | `GET /analytics/weekly-volume` | The refetch target for `analytics.updated`. Its Postgres fallback on a cache miss is what makes a dropped notification recoverable. |
 | `DELETE /workouts/:id` | Also the dismissal path for a failed workout (FR-014) — dismissing is deleting, not a new operation. |
 | `POST /workouts` | Now also the trigger for a `workout.created` notification to the user's other sessions. |

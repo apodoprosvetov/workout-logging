@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { weekKeyForOffset, type WeeklyVolumeResponse } from '@lib/analytics';
+import { type WeeklyVolumeResponse } from '@lib/contracts/analytics';
+import { weekKeyForOffset } from '@lib/weeks';
 import { getWeeklyVolume } from '@services/analytics';
 import { useWorkoutLog } from '@services/workout-events';
 

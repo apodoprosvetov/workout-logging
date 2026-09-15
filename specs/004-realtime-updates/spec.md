@@ -106,9 +106,8 @@ detail.
 7. **Given** the user has closed the in-flight surface, **When** workouts of
    theirs are still being processed, **Then** the control that opens the surface
    shows how many, so the work is never invisible.
-8. **Given** a workout settles, **When** the user was scrolled down or had an
-   entry expanded, **Then** their scroll position and expanded entry are
-   preserved.
+8. **Given** a workout settles, **When** the user was scrolled down the history,
+   **Then** their scroll position is preserved.
 
 ---
 
@@ -319,8 +318,9 @@ data without user action.
 - **FR-016**: On being notified that data it is displaying has changed, a screen
   MUST bring itself up to date without user action.
 - **FR-017**: Updating a screen MUST preserve what the user has chosen: the week
-  the dashboard is on, the page of history they are viewing, their scroll
-  position, and any entry they have expanded.
+  the dashboard is on, the page of history they are viewing, and their scroll
+  position. (Expandable entries were dropped on 2026-09-15: a workout row links
+  to its own detail page, so there is no in-list expansion to preserve.)
 - **FR-018**: An update MUST NOT navigate the user. The single exception: the
   session that logged a workout MAY move the dashboard to the week that workout
   settled into. No other session may change week in response to it.

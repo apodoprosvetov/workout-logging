@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { WorkoutTable } from '@components/workout-table';
-import { weekRangeForOffset } from '@lib/analytics';
-import { STATUS_NEEDS_REVIEW, STATUS_PARSED, type WorkoutListResponse } from '@lib/workouts';
+import {
+  STATUS_NEEDS_REVIEW,
+  STATUS_PARSED,
+  type WorkoutListResponse,
+} from '@lib/contracts/workouts';
+import { weekRangeForOffset } from '@lib/weeks';
 import { publishWorkoutDeleted, useWorkoutLog } from '@services/workout-events';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 

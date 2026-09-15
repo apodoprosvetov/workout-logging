@@ -1,9 +1,9 @@
 // HTTP operations against apps/api's /workouts routes.
 //
-// Distinct from lib/workouts.ts, which holds the contract *types* and pure
-// formatters — this is the IO half (plan.md: services/ for IO clients, lib/ for
-// pure helpers and types). At the import site the alias keeps them apart:
-// `@services/workouts` calls the API, `@lib/workouts` describes its shapes.
+// Distinct from lib/contracts/workouts.ts, which holds the contract *types* —
+// this is the IO half (plan.md: services/ for IO clients, lib/ for pure helpers
+// and types). At the import site the alias keeps them apart:
+// `@services/workouts` calls the API, `@lib/contracts/workouts` describes its shapes.
 //
 // Extension contract — follow it when adding listWorkouts, getWorkout,
 // createWorkout and the rest, so callers can predict a new function without
@@ -23,7 +23,7 @@
 
 import { ApiError, apiFetch, apiJson } from './api-client';
 
-import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/workouts';
+import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/contracts/workouts';
 
 /**
  * Query for {@link listWorkouts}, mirroring `GET /workouts` in contracts/api.md.
