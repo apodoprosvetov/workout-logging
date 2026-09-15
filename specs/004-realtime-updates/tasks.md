@@ -108,7 +108,7 @@ it. See [quickstart.md](./quickstart.md) scenarios 1–3.
 
 ### The two surfaces
 
-- [ ] T027 [P] [US1] Filter the dashboard's weekly list to `?status=parsed&status=needs_review` in `apps/web/features/dashboard/weekly-workouts.tsx`, keeping the existing request-sequencing guard
+- [X] T027 [P] [US1] Filter the dashboard's weekly list to `?status=parsed&status=needs_review` in `apps/web/features/dashboard/weekly-workouts.tsx`, keeping the existing request-sequencing guard
 - [ ] T028 [P] [US1] Filter the workout history the same way in `apps/web/features/workouts/workout-list.tsx`, preserving across refetches everything FR-017 names: the page being viewed, scroll position, and any row the user has expanded — an expanded row must not collapse because an unrelated workout settled
 - [ ] T029 [US1] Build the in-flight modal (portal-rendered; processing items, failed items with an explanation, and an explicit "nothing in progress" state) in `apps/web/features/in-flight/`, sourced from `?status=pending&status=failed` per [contracts/ui.md](./contracts/ui.md)
 - [ ] T030 [US1] Open the modal from the logging control and show the in-flight count on it while closed, in `apps/web/components/log-workout-button.tsx` — without this, closing the modal makes in-progress work invisible (FR-013)

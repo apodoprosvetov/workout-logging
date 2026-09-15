@@ -5,7 +5,13 @@ import type { Paginated } from './pagination';
 // apps/api's internal TypeORM entities (plan.md: apps/web never touches the
 // DB layer, only calls apps/api over HTTP).
 
-export type WorkoutStatus = 'pending' | 'parsed' | 'needs_review' | 'failed';
+export const STATUS_PENDING = 'pending';
+export const STATUS_PARSED = 'parsed';
+export const STATUS_NEEDS_REVIEW = 'needs_review';
+export const STATUS_FAILED = 'failed';
+
+export type WorkoutStatus =
+  typeof STATUS_PENDING | typeof STATUS_PARSED | typeof STATUS_NEEDS_REVIEW | typeof STATUS_FAILED;
 export type WorkoutSource = 'web' | 'telegram';
 export type SetUnit = 'kg' | 'lb';
 

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { WorkoutTable } from '@components/workout-table';
 import { weekRangeForOffset } from '@lib/analytics';
-import { type WorkoutListResponse } from '@lib/workouts';
+import { STATUS_NEEDS_REVIEW, STATUS_PARSED, type WorkoutListResponse } from '@lib/workouts';
 import { publishWorkoutDeleted, useWorkoutLog } from '@services/workout-events';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 
@@ -40,6 +40,7 @@ export function WeeklyWorkouts({ weeksAgo }: { weeksAgo: number }) {
         after: monday.toISOString(),
         before: before.toISOString(),
         per_page: WEEK_PER_PAGE,
+        status: [STATUS_NEEDS_REVIEW, STATUS_PARSED],
       });
       if (seq !== requestSeq.current) return;
       setData(result);

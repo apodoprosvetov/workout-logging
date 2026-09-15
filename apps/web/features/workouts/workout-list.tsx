@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { WorkoutTable } from '@components/workout-table';
 import { useRequireAuth } from '@hooks/use-require-auth';
 import { FIRST_PAGE } from '@lib/pagination';
-import { type WorkoutListResponse } from '@lib/workouts';
+import { STATUS_NEEDS_REVIEW, STATUS_PARSED, type WorkoutListResponse } from '@lib/workouts';
 import { publishWorkoutDeleted, useWorkoutLog } from '@services/workout-events';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 
@@ -32,7 +32,11 @@ export function WorkoutList() {
     setError(null);
     setResult(null);
     try {
-      const result = await listWorkouts({ page: forPage, per_page: PER_PAGE });
+      const result = await listWorkouts({
+        page: forPage,
+        per_page: PER_PAGE,
+        status: [STATUS_NEEDS_REVIEW, STATUS_PARSED],
+      });
       if (seq !== requestSeq.current) return;
       setResult(result);
     } catch {
