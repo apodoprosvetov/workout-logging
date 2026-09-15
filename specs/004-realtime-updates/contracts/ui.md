@@ -56,8 +56,27 @@ renders `pending` and `failed` with the same vocabulary.
 same control the user already presses to log a workout, so the flow is
 "log → watch it land" in one place rather than two.
 
-**Rendered via a portal**, so it escapes the header's stacking and layout
-context and is not clipped by it.
+**Escapes the header's stacking and layout context**, so it is not clipped by
+it. Implemented (2026-09-15) as a native `<dialog>` opened with `showModal()`
+rather than the React portal this contract originally named: `showModal()` puts
+the element in the browser's *top layer*, which is above every stacking context
+on the page by definition, whereas a portal into `document.body` still competes
+on `z-index`. It is also the pattern `LogWorkoutButton` already uses for the
+logging form, and it brings the backdrop, focus trap and Esc-to-close along.
+Verified in Chrome with `dialog.matches(':modal')`.
+
+**A separate `<dialog>` from the logging form's**, not a second pane in the same
+host. This is what makes FR-021 hold by construction rather than by care:
+opening, closing or refetching the in-flight surface cannot remount
+`LogWorkoutForm`, because the form is not in its tree (T034). Verified in Chrome
+against a real notification, with the form half-filled.
+
+Both dialogs are the same shell, `components/modal.tsx`. Neither surface drives
+a `<dialog>` of its own: each is a panel its host opens, so the two behave
+identically and a reader who has understood one has understood the other. The
+surfaces themselves live under `features/` (`features/log-workout/`,
+`features/in-flight/`) — each has exactly one caller, so neither meets the bar
+`components/` holds, which is chrome shared across pages.
 
 **Contents**
 

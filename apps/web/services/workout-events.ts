@@ -6,7 +6,7 @@ import { loadTokens, subscribeToSession } from './api-client';
 import { startEventStream } from './event-stream';
 
 // Carries "a workout was just logged" from the header's logging form
-// (components/log-workout-form.tsx) to whatever lists happen to be mounted:
+// (features/log-workout/log-workout-form.tsx) to whatever lists are mounted:
 // the dashboard's weekly list and volume chart, and the full history on
 // /workouts. Those live in different subtrees with no common parent to hold
 // the state, and this project has no data-fetching library, so this module is
