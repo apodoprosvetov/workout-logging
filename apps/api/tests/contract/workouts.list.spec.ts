@@ -130,6 +130,101 @@ describe('GET /workouts (contract, per contracts/api.md)', () => {
     expect(rows.map((w) => w.id)).toContain(needsReviewId);
   });
 
+  describe('status accepts a list (contracts/api.md)', () => {
+    // Its own user, so the counts below are exact rather than "at least".
+    // Every other test in this file seeds into the shared user, and a filter
+    // assertion that can only say "contains" would miss the failure that
+    // matters most here: returning *more* than was asked for.
+    let listUserId: string;
+    let listToken: string;
+
+    beforeAll(async () => {
+      const owner = await registerAndGetToken('status-list');
+      listUserId = owner.userId;
+      listToken = owner.accessToken;
+
+      const ds = createTypeOrmDataSource();
+      await ds.initialize();
+      for (const status of [
+        WorkoutStatus.PENDING,
+        WorkoutStatus.PARSED,
+        WorkoutStatus.NEEDS_REVIEW,
+        WorkoutStatus.FAILED,
+      ]) {
+        await seedWorkout(ds, listUserId, { status });
+      }
+      await ds.destroy();
+    });
+
+    async function statuses(query: string): Promise<string[]> {
+      const res = await request(httpServer(app))
+        .get(`/api/workouts${query}`)
+        .set('authorization', `Bearer ${listToken}`);
+      expect(res.status).toBe(200);
+      return (res.body.data as Array<{ status: string }>).map((w) => w.status).sort();
+    }
+
+    it('returns the union when status is repeated', async () => {
+      expect(await statuses('?status=parsed&status=needs_review')).toEqual([
+        'needs_review',
+        'parsed',
+      ]);
+    });
+
+    it('returns the settled pair the lists will ask for (FR-009)', async () => {
+      // The exact query apps/web uses once T027/T028 land — worth pinning here
+      // rather than discovering it only through the UI.
+      expect(await statuses('?status=parsed&status=needs_review')).not.toContain('pending');
+    });
+
+    it('returns the in-flight pair the modal will ask for (FR-011)', async () => {
+      expect(await statuses('?status=pending&status=failed')).toEqual(['failed', 'pending']);
+    });
+
+    it('is unaffected by a repeated duplicate value', async () => {
+      // Asserts duplicates are *harmless*, not that they were removed: SQL
+      // `IN ('parsed','parsed')` behaves identically to a single value, so the
+      // dedupe in the DTO is not observable from here. What this catches is a
+      // duplicate reaching the query in a form that errors.
+      expect(await statuses('?status=parsed&status=parsed')).toEqual(['parsed']);
+    });
+
+    it('still accepts a single value, unchanged', async () => {
+      // The compatibility promise in contracts/api.md. Every existing caller
+      // uses this form.
+      expect(await statuses('?status=parsed')).toEqual(['parsed']);
+    });
+
+    it('returns every status when the parameter is absent', async () => {
+      // The most load-bearing case: apps/web calls this route with no filter
+      // today, so a regression here breaks both lists at once and would not
+      // show up in any status-specific test.
+      expect(await statuses('')).toEqual(['failed', 'needs_review', 'parsed', 'pending']);
+    });
+
+    it('treats an empty value as no filter', async () => {
+      expect(await statuses('?status=')).toEqual(['failed', 'needs_review', 'parsed', 'pending']);
+    });
+
+    it('rejects an unknown status with 400', async () => {
+      const res = await request(httpServer(app))
+        .get('/api/workouts?status=not-a-status')
+        .set('authorization', `Bearer ${listToken}`);
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a list where only one entry is invalid', async () => {
+      // `each: true` validates every element — a valid first value must not
+      // wave the rest through.
+      const res = await request(httpServer(app))
+        .get('/api/workouts?status=parsed&status=not-a-status')
+        .set('authorization', `Bearer ${listToken}`);
+
+      expect(res.status).toBe(400);
+    });
+  });
+
   it('respects per_page', async () => {
     const res = await request(httpServer(app))
       .get('/api/workouts?per_page=1')
