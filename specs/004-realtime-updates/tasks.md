@@ -102,8 +102,8 @@ it. See [quickstart.md](./quickstart.md) scenarios 1–3.
 
 ### Querying by settled status
 
-- [ ] T024 [US1] Change `status` from a scalar to a repeatable value in `apps/api/src/workouts/dto/list-workouts-query.dto.ts`, validating each against `WorkoutStatus` and collapsing duplicates
-- [ ] T025 [US1] Apply it as `w.status IN (:...statuses)` in `apps/api/src/workouts/workouts.service.ts`, keeping single-value and absent behaviour identical
+- [X] T024 [US1] Change `status` from a scalar to a repeatable value in `apps/api/src/workouts/dto/list-workouts-query.dto.ts`, validating each against `WorkoutStatus` and collapsing duplicates. Fastify already parses a repeated param into an array — verified against the running API — so only the DTO needed teaching. A `@Transform` normalises both shapes (`?status=x` arrives as a string, `?status=x&status=y` as an array) and dedupes through a `Set`, then `@IsEnum(..., { each: true })` validates every element. `?status=` with an empty value is treated as no filter, matching an absent parameter
+- [X] T025 [US1] Apply it as `w.status IN (:...statuses)` in `apps/api/src/workouts/workouts.service.ts`, keeping single-value and absent behaviour identical. Must land together with T024: between them the route is broken, because an array reaching the old `w.status = :status` has no valid SQL form.`?.length` guards the empty array: `IN ()` is a syntax error, not an empty result
 - [ ] T026 [P] [US1] Extend `apps/api/tests/contract/workouts.list.spec.ts`: single `?status` unchanged; repeated `?status` returns the union; unknown value → 400; absent returns all statuses
 
 ### The two surfaces

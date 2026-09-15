@@ -45,7 +45,13 @@ export class WorkoutsService {
       .orderBy('w.performedAt', 'DESC')
       .addOrderBy('w.id', 'DESC');
 
-    if (query.status) qb.andWhere('w.status = :status', { status: query.status });
+    // `IN` even for one value, because contracts/api.md promises the
+    // single-value form keeps working and an absent parameter keeps returning
+    // every status — apps/web calls this route with no filter at all today.
+    //
+    // `?.length` guards the empty case on purpose: `IN ()` is a SQL syntax
+    // error, not an empty result.
+    if (query.status?.length) qb.andWhere('w.status IN (:...statuses)', { statuses: query.status });
     if (query.before) qb.andWhere('w.performedAt < :before', { before: new Date(query.before) });
     if (query.after) qb.andWhere('w.performedAt >= :after', { after: new Date(query.after) });
 
