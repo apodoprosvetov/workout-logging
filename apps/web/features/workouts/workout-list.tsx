@@ -73,14 +73,15 @@ export function WorkoutList() {
   // A workout logged from the header belongs at the top of this list, so
   // refetch when one is announced (FR-011). The revision is the dependency —
   // the date is the dashboard's business, not this list's.
-  const { revision } = useWorkoutLog();
+  const { revision, changeType } = useWorkoutLog();
 
   useEffect(() => {
+    if (changeType === 'analytics.updated') return;
     // React's documented fetch-in-effect pattern (no data lib in this project) —
     // same as workout-detail.tsx / weekly-workouts.tsx.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (ready) void load(page);
-  }, [ready, page, revision, load]);
+  }, [ready, page, revision, changeType, load]);
 
   // Optimistic: the row goes immediately and comes back if the request fails.
   // That is what keeps WorkoutTable stateless — with no in-flight window there

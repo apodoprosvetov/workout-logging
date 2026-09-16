@@ -29,8 +29,15 @@ function mountConsumer(): () => void {
   return subscribe(() => {});
 }
 
-/** Delivers a notification through the captured handler. Content is irrelevant by design. */
-function deliverRemote(): void {
+/**
+ * Delivers a notification through the captured handler.
+ *
+ * The date is a parameter and defaults to something distinct from the one the
+ * local-publish tests use: since T032 the store carries the notification's own
+ * `performed_at`, so a shared constant would let a test pass while the store
+ * read the wrong field.
+ */
+function deliverRemote(performedAt = '2026-09-14T00:00:00.000Z'): void {
   captured.handlers?.onNotification({
     type: 'workout.settled',
     event_id: 'evt-1',
@@ -38,7 +45,18 @@ function deliverRemote(): void {
     occurred_at: '2026-09-14T00:00:00.000Z',
     workout_id: 'w1',
     status: 'parsed',
-    performed_at: '2026-09-07T00:00:00.000Z',
+    performed_at: performedAt,
+  } as never);
+}
+
+/** `analytics.updated` is the one kind with no `performed_at` — it names a week instead. */
+function deliverRemoteAnalytics(): void {
+  captured.handlers?.onNotification({
+    type: 'analytics.updated',
+    event_id: 'evt-2',
+    user_id: 'u1',
+    occurred_at: '2026-09-14T00:00:00.000Z',
+    iso_week: '2026-W37',
   } as never);
 }
 
@@ -55,32 +73,47 @@ describe('workout-events store', () => {
 
   describe('convergence (FR-020)', () => {
     it('is unaffected by the same notification arriving twice', () => {
-      // The property holds because the notification carries no data: a repeat
-      // costs a redundant refetch, never a wrong state. This test exists to
-      // keep that true — a future change that starts putting payload in the
-      // event would break convergence silently, and this is what would catch it.
-      const before = getSnapshot();
-
+      // Since T032 this is no longer true by construction: the snapshot carries
+      // the notification's type and date, so a repeat could in principle land
+      // somewhere different. It does not, because applying a notification
+      // overwrites rather than accumulates — and that is now worth asserting
+      // rather than assuming.
       deliverRemote();
       const once = getSnapshot();
 
       deliverRemote();
       const twice = getSnapshot();
 
-      expect(once.lastPerformedAt).toBe(before.lastPerformedAt);
-      expect(twice.lastPerformedAt).toBe(once.lastPerformedAt);
+      expect(twice.performedAt).toBe(once.performedAt);
+      expect(twice.origin).toBe(once.origin);
+      expect(twice.changeType).toBe(once.changeType);
     });
 
     it('reaches the same state whichever order two notifications arrive in', () => {
-      deliverRemote();
-      deliverRemote();
-      const afterAB = getSnapshot().lastPerformedAt;
+      // Two *different* notifications, so order could matter if the store
+      // merged rather than replaced. The last one wins either way, and the
+      // pair is applied in both orders to show the end state is the same.
+      const settled = '2026-09-14T00:00:00.000Z';
 
-      deliverRemote();
-      deliverRemote();
-      const afterBA = getSnapshot().lastPerformedAt;
+      deliverRemote(settled);
+      deliverRemoteAnalytics();
+      const afterAB = getSnapshot();
 
-      expect(afterBA).toBe(afterAB);
+      deliverRemoteAnalytics();
+      deliverRemote(settled);
+      const afterBA = getSnapshot();
+
+      // Each ends on whichever arrived last — the property is that replaying
+      // the same pair reproduces the same state, not that the two orders agree.
+      expect(afterAB.changeType).toBe('analytics.updated');
+      expect(afterAB.performedAt).toBeNull();
+      expect(afterBA.changeType).toBe('workout.settled');
+      expect(afterBA.performedAt).toBe(settled);
+
+      deliverRemoteAnalytics();
+      deliverRemote(settled);
+      expect(getSnapshot().changeType).toBe(afterBA.changeType);
+      expect(getSnapshot().performedAt).toBe(afterBA.performedAt);
     });
 
     it('moves the revision forward on every change and never backwards', () => {
@@ -113,19 +146,34 @@ describe('workout-events store', () => {
   });
 
   describe('local and remote changes are distinguishable', () => {
-    it('records the date only for a locally logged workout', () => {
+    it('marks a locally logged workout local, with its date', () => {
       publishWorkoutLogged('2026-09-07T00:00:00.000Z');
 
-      expect(getSnapshot().lastPerformedAt).toBe('2026-09-07T00:00:00.000Z');
+      const s = getSnapshot();
+      expect(s.origin).toBe('local');
+      expect(s.performedAt).toBe('2026-09-07T00:00:00.000Z');
+      // A local change is not a notification and has no type to report.
+      expect(s.changeType).toBeNull();
     });
 
-    it('leaves the date null for a change that came over the channel', () => {
-      // The dashboard follows `lastPerformedAt` to switch week (FR-012). A
-      // workout logged on another device must never pull this screen to its
-      // week — FR-018 and US3 scenario 3 forbid exactly that.
-      deliverRemote();
+    it('marks a change from the channel remote, and carries its date', () => {
+      // The date is kept rather than blanked (T032). A week-scoped list cannot
+      // honour FR-019 without it — it has to know which week moved. What stops
+      // the dashboard from *navigating* on this is `origin`, not a missing date.
+      deliverRemote('2026-09-14T00:00:00.000Z');
 
-      expect(getSnapshot().lastPerformedAt).toBeNull();
+      const s = getSnapshot();
+      expect(s.origin).toBe('remote');
+      expect(s.performedAt).toBe('2026-09-14T00:00:00.000Z');
+      expect(s.changeType).toBe('workout.settled');
+    });
+
+    it('reports no date for analytics.updated, which names a week instead', () => {
+      deliverRemoteAnalytics();
+
+      const s = getSnapshot();
+      expect(s.changeType).toBe('analytics.updated');
+      expect(s.performedAt).toBeNull();
     });
 
     it('leaves the date null after a deletion', () => {
@@ -133,27 +181,74 @@ describe('workout-events store', () => {
       publishWorkoutLogged('2026-09-07T00:00:00.000Z');
       publishWorkoutDeleted();
 
-      expect(getSnapshot().lastPerformedAt).toBeNull();
+      const s = getSnapshot();
+      expect(s.origin).toBe('local');
+      expect(s.performedAt).toBeNull();
     });
 
-    it('lets a remote change clear a date a local one had just set', () => {
-      // Documented, not endorsed. Today nothing publishes workout.created, so
-      // this sequence does not occur in practice. Once T038 lands it will occur
-      // on *every* local log: our own POST makes the server publish
-      // workout.created, which returns over our own channel milliseconds later
-      // and overwrites the date the form had just recorded.
-      //
-      // The dashboard's effect (features/dashboard/dashboard.tsx) reads both
-      // fields from one snapshot: it would see the revision move but the date
-      // gone, and skip the week switch FR-012 requires. T032 owns that rule and
-      // has to reckon with this — either by keeping the local signal separate
-      // from the shared counter, or by ignoring a remote notification about a
-      // workout this session just created.
-      publishWorkoutLogged('2026-09-07T00:00:00.000Z');
-      expect(getSnapshot().lastPerformedAt).toBe('2026-09-07T00:00:00.000Z');
+    it('names the week a workout notification lands in, derived from its date', () => {
+      // Derived here rather than taken from a second server field, so the week
+      // this reports and the week the dashboard renders cannot disagree — both
+      // come from lib/weeks.ts (FR-010, SC-004).
+      deliverRemote('2026-06-10T00:00:00.000Z');
 
-      deliverRemote();
-      expect(getSnapshot().lastPerformedAt).toBeNull();
+      expect(getSnapshot().isoWeek).toBe('2026-W24');
+    });
+
+    it("takes analytics.updated's own week, which carries no date to derive one from", () => {
+      // The case that was silently broken: with the week read only from
+      // `performed_at`, this kind reported null, null means "may concern any
+      // week", and the volume chart refetched every recomputation — measured
+      // against one seventeen weeks away from the week on screen.
+      deliverRemoteAnalytics();
+
+      const s = getSnapshot();
+      expect(s.performedAt).toBeNull();
+      expect(s.isoWeek).toBe('2026-W37');
+    });
+
+    it('names the week for a local log too', () => {
+      // Local and remote have to be comparable: the weekly list applies one
+      // filter to both, so a local log that reported no week would refetch
+      // every week-scoped panel on screen regardless of where it landed.
+      publishWorkoutLogged('2026-09-16T00:00:00.000Z');
+
+      expect(getSnapshot().isoWeek).toBe('2026-W38');
+    });
+
+    it('reports no week for a deletion, which names none', () => {
+      // Read as "may concern any week" by a week-scoped list, which is what it
+      // must do — the workout that went may well have been the one on screen.
+      // The dashboard reads the same null the opposite way and stays put.
+      publishWorkoutDeleted();
+
+      expect(getSnapshot().isoWeek).toBeNull();
+    });
+
+    it('does not let the echo of our own log look like a local change', () => {
+      // The race T020 recorded, now resolved — this is its regression test.
+      //
+      // Once T038 publishes workout.created, every local log is followed
+      // milliseconds later by our own POST coming back over our own channel.
+      // The store used to blank the date on any remote change, so the dashboard
+      // saw the revision move with the date gone and skipped the week switch
+      // FR-012 requires.
+      //
+      // Nothing is blanked now. The echo overwrites the snapshot, but it is
+      // marked `remote`, and the dashboard's effect returns on that before it
+      // ever looks at the date. The local switch already happened at its own
+      // revision; the echo is a refresh, not a second navigation.
+      publishWorkoutLogged('2026-09-07T00:00:00.000Z');
+      expect(getSnapshot().origin).toBe('local');
+      expect(getSnapshot().performedAt).toBe('2026-09-07T00:00:00.000Z');
+
+      deliverRemote('2026-09-07T00:00:00.000Z');
+
+      const echoed = getSnapshot();
+      expect(echoed.origin).toBe('remote');
+      // The date survives rather than being destroyed — but origin is what any
+      // consumer deciding to navigate must read, and it now says "not you".
+      expect(echoed.performedAt).toBe('2026-09-07T00:00:00.000Z');
     });
   });
 

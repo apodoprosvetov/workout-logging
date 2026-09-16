@@ -35,7 +35,7 @@ export function useInFlight(): InFlightSnapshot {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setLoading] = useState(false);
 
-  const { revision } = useWorkoutLog();
+  const { revision, changeType } = useWorkoutLog();
 
   // ignore a response a newer request has superseded.
   const requestSeq = useRef(0);
@@ -88,9 +88,10 @@ export function useInFlight(): InFlightSnapshot {
   );
 
   useEffect(() => {
+    if (changeType === 'analytics.updated') return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
-  }, [revision, load]);
+  }, [revision, changeType, load]);
 
   return useMemo(() => {
     return {

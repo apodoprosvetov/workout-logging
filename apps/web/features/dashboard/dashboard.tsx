@@ -25,27 +25,33 @@ export default function Dashboard() {
   // Keyed on `revision`, not on the date: logging a second workout into the
   // same week must still count as an event, and the user may have navigated
   // away from that week in between.
-  const { revision, lastPerformedAt } = useWorkoutLog();
+  const { revision, origin, performedAt } = useWorkoutLog();
   const seenRevision = useRef(revision);
 
   useEffect(() => {
     if (revision === seenRevision.current) return;
     seenRevision.current = revision;
-    if (lastPerformedAt === null) return;
+
+    // Only this session may follow a workout to its week (FR-018, and
+    // contracts/ui.md's first condition). A change that arrived over the
+    // notification channel is another tab, another device, or the worker, and
+    // none of them may move the week under someone who did not act — US3
+    // scenario 3 forbids exactly that. It refreshes in place instead: the lists
+    // below react to `revision` regardless of origin.
+    if (origin !== 'local') return;
+
+    if (performedAt === null) return;
 
     // Clamped, not ignored: a workout dated in the future has no week to show
     // (FR-003), and one older than the window can only be reached at its edge.
     // Moving as far as we can still tells the user something happened; staying
     // put would look exactly like the bug this requirement exists to fix.
-    const target = Math.min(
-      MAX_WEEKS_BACK,
-      Math.max(0, weeksAgoForDate(new Date(lastPerformedAt))),
-    );
+    const target = Math.min(MAX_WEEKS_BACK, Math.max(0, weeksAgoForDate(new Date(performedAt))));
     // Setting state here rather than during render is deliberate: this reacts
     // to an external store changing, which is not information render has.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (target !== weeksAgo) setWeeksAgo(target);
-  }, [revision, lastPerformedAt, weeksAgo]);
+  }, [revision, origin, performedAt, weeksAgo]);
 
   if (!ready) return null;
 
