@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   connectRabbitMq,
@@ -14,13 +14,18 @@ import {
   WorkoutSet,
   WorkoutSource,
   WorkoutStatus,
+  WORKOUT_DELETED_KEY,
   WORKOUT_DELETED_ROUTING_KEY,
   WORKOUT_EVENTS_EXCHANGE,
 } from '@workout-logging/shared';
 
 import { AuthModule } from '../../src/auth/auth.module';
+import { REDIS_CLIENT } from '../../src/redis/redis.module';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
+import { NotificationListener } from '../helpers/notifications';
 import { createTestApp, deleteTestUsers, httpServer, testEmailFactory } from '../helpers/test-app';
+
+import type Redis from 'ioredis';
 
 describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
   let app: NestFastifyApplication;
@@ -257,5 +262,84 @@ describe('DELETE /workouts/:id (contract, per contracts/api.md)', () => {
       await channel.close();
       await conn.close();
     }
+  });
+
+  // T040. The RabbitMQ event is already covered above; this is the notification
+  // beside it — a different transport with a different contract and a different
+  // failure policy, so it needs its own assertions.
+  describe('workout.deleted notification (T039, FR-030)', () => {
+    it('publishes workout.deleted on the owner channel, carrying the week', async () => {
+      const workoutId = await seedWorkout(userId);
+      const listener = await NotificationListener.open(accessToken);
+
+      try {
+        const res = await request(httpServer(app))
+          .delete(`/api/workouts/${workoutId}`)
+          .set('authorization', `Bearer ${accessToken}`);
+        expect(res.status).toBe(204);
+
+        const note = await listener.waitFor(
+          (n) => n.type === WORKOUT_DELETED_KEY && 'workout_id' in n && n.workout_id === workoutId,
+        );
+        expect(note).not.toBeNull();
+        expect(note).toMatchObject({
+          type: WORKOUT_DELETED_KEY,
+          user_id: userId,
+          workout_id: workoutId,
+          // Read off the entity before the transaction: by the time this
+          // publishes the row is gone, and a week-scoped screen has nothing
+          // left to look the date up from.
+          performed_at: '2020-06-01T00:00:00.000Z',
+        });
+      } finally {
+        listener.close();
+      }
+    });
+
+    it('still returns 204 when the notification cannot be published (FR-030)', async () => {
+      const workoutId = await seedWorkout(userId);
+      const redis = app.get<Redis>(REDIS_CLIENT);
+      const publish = vi
+        .spyOn(redis, 'publish')
+        .mockRejectedValue(new Error('redis is down') as never);
+
+      try {
+        const res = await request(httpServer(app))
+          .delete(`/api/workouts/${workoutId}`)
+          .set('authorization', `Bearer ${accessToken}`);
+        expect(res.status).toBe(204);
+        expect(publish).toHaveBeenCalled();
+      } finally {
+        publish.mockRestore();
+      }
+    });
+
+    it('deletes the workout even though the notification failed', async () => {
+      // The deletion is the durable half. A swallowed notification leaves other
+      // screens stale until their next refetch, which FR-030 accepts; leaving
+      // the row behind would be a different thing entirely.
+      const workoutId = await seedWorkout(userId);
+      const redis = app.get<Redis>(REDIS_CLIENT);
+      const publish = vi
+        .spyOn(redis, 'publish')
+        .mockRejectedValue(new Error('redis is down') as never);
+
+      try {
+        await request(httpServer(app))
+          .delete(`/api/workouts/${workoutId}`)
+          .set('authorization', `Bearer ${accessToken}`)
+          .expect(204);
+      } finally {
+        publish.mockRestore();
+      }
+
+      const ds = createTypeOrmDataSource();
+      await ds.initialize();
+      const rows = (await ds.query('SELECT id FROM workouts WHERE id = $1', [
+        workoutId,
+      ])) as unknown[];
+      await ds.destroy();
+      expect(rows).toHaveLength(0);
+    });
   });
 });

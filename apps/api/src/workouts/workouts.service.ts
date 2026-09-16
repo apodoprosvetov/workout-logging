@@ -4,10 +4,17 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Workout, WORKOUT_DELETED_ROUTING_KEY, WorkoutDeletedEvent } from '@workout-logging/shared';
+import {
+  ChangeNotification,
+  Workout,
+  WORKOUT_DELETED_KEY,
+  WORKOUT_DELETED_ROUTING_KEY,
+  WorkoutDeletedEvent,
+} from '@workout-logging/shared';
 
 import { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
 import { paginate } from '../common/pagination';
+import { NotificationsPublisher } from '../events/notifications.publisher';
 import { RabbitMqPublisherService } from '../events/rabbitmq-publisher.service';
 
 // Read/CRUD side of workouts (list/get today; room for delete, patch, and a
@@ -19,6 +26,7 @@ export class WorkoutsService {
   constructor(
     @InjectRepository(Workout) private readonly workoutRepository: Repository<Workout>,
     private readonly publisher: RabbitMqPublisherService,
+    private readonly notification: NotificationsPublisher,
   ) {}
 
   // FR-015: every read scoped to the caller — userId is always an equality
@@ -150,5 +158,15 @@ export class WorkoutsService {
     // it; that is disproportionate here, and the apps/api read path falls back
     // to Postgres on a cache miss, so nothing is permanently wrong — only stale.
     await this.publisher.publish(WORKOUT_DELETED_ROUTING_KEY, event);
+
+    const notification: ChangeNotification = {
+      type: WORKOUT_DELETED_KEY,
+      event_id: randomUUID(),
+      user_id: userId,
+      workout_id: workoutId,
+      occurred_at: new Date().toISOString(),
+      performed_at: workout.performedAt.toISOString(),
+    };
+    await this.notification.publish(notification);
   }
 }
