@@ -1,7 +1,11 @@
+import { randomUUID } from 'node:crypto';
+
 import {
+  ANALYTICS_UPDATED_KEY,
   computeWeeklyVolume,
   getRetryAttempt,
   isoWeekKey,
+  publishNotification,
   retryQueueForAttempt,
   RETRY_ATTEMPT_HEADER,
   weeklyVolumeRedisKey,
@@ -89,7 +93,11 @@ async function recomputeWeek(
     userId,
     performedAt,
   );
-  const key = weeklyVolumeRedisKey(userId, isoWeekKey(performedAt));
+  // One computation of the week key, used for the cache key and the
+  // notification alike — the client compares this string against the week it is
+  // displaying, so a second derivation here is a chance for the two to disagree.
+  const week = isoWeekKey(performedAt);
+  const key = weeklyVolumeRedisKey(userId, week);
 
   const pipeline = context.redis.multi().del(key);
   if (Object.keys(volume).length > 0) {
@@ -100,6 +108,48 @@ async function recomputeWeek(
     pipeline.expire(key, WEEKLY_VOLUME_TTL_SECONDS);
   }
   await pipeline.exec();
+
+  await announceRecomputed(context, userId, week);
+}
+
+/**
+ * Tell the user's open screens that this week's figures moved (FR-004).
+ *
+ * Called only after `exec()` has committed, never before. A notification is an
+ * invitation to refetch, so announcing an uncommitted recomputation races every
+ * listening client into reading the figures this pipeline was about to replace
+ * — and they would have no reason to ask again.
+ *
+ * `iso_week` is carried rather than derived by the client, because for a
+ * deletion there is nothing left to derive it from: the workout row is already
+ * gone, which is the same reason the deletion event itself carries
+ * `performed_at`.
+ *
+ * A failed publish is logged and swallowed — by `publishNotification` itself,
+ * which never throws, so this cannot fail the message. That matters here beyond
+ * tidiness: the recompute is already committed and is the durable part, the
+ * notification is not (constitution: Events Durable, Notifications Not).
+ * Retrying would redo a recomputation that already succeeded, purely to
+ * re-announce it — and the screens converge anyway, because apps/api recomputes
+ * from Postgres on a cache miss and every client refetches on its next
+ * interaction.
+ */
+async function announceRecomputed(
+  context: WorkerContext,
+  userId: string,
+  isoWeek: string,
+): Promise<void> {
+  await publishNotification(
+    context.redis,
+    {
+      type: ANALYTICS_UPDATED_KEY,
+      event_id: randomUUID(),
+      user_id: userId,
+      occurred_at: new Date().toISOString(),
+      iso_week: isoWeek,
+    },
+    log,
+  );
 }
 
 // Analytics failures are transient (a Redis/Postgres blip). Walk the same retry

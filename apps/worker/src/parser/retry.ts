@@ -6,6 +6,7 @@ import {
   getWorkoutImagesBucket,
   RawUploadDocument,
   RETRY_ATTEMPT_HEADER,
+  publishNotification,
   retryQueueForAttempt,
   WorkoutStatus,
   WorkoutUploadedEvent,
@@ -16,7 +17,6 @@ import {
 } from '@workout-logging/shared';
 
 import { log } from '../logger.js';
-import { publishNotification } from '../notifications.js';
 
 import type { WorkerContext } from '../index.js';
 import type { ConsumeMessage } from 'amqplib';
@@ -70,15 +70,19 @@ export async function handleParseFailure(
       // null means the guard skipped the update — the workout had already left
       // `pending`, so it has been announced once and must not be announced again.
       if (settled) {
-        await publishNotification(context.redis, {
-          type: WORKOUT_SETTLED_KEY,
-          event_id: randomUUID(),
-          user_id: settled.userId,
-          occurred_at: new Date().toISOString(),
-          workout_id: event.workout_id,
-          status: WorkoutStatus.FAILED,
-          performed_at: settled.performedAt.toISOString(),
-        });
+        await publishNotification(
+          context.redis,
+          {
+            type: WORKOUT_SETTLED_KEY,
+            event_id: randomUUID(),
+            user_id: settled.userId,
+            occurred_at: new Date().toISOString(),
+            workout_id: event.workout_id,
+            status: WorkoutStatus.FAILED,
+            performed_at: settled.performedAt.toISOString(),
+          },
+          log,
+        );
       }
     } catch (err) {
       // Best-effort per contracts/events.md — the DLQ message is still the

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   deleteWorkoutImages,
   getWorkoutImagesBucket,
+  publishNotification,
   RawUploadDocument,
   SetUnit,
   withEventIdempotency,
@@ -22,7 +23,6 @@ import {
 } from '@workout-logging/shared';
 
 import { log } from '../logger.js';
-import { publishNotification } from '../notifications.js';
 import { extractWorkout } from './claude.js';
 import { matchAndUpsertExercise } from './exercise-matcher.js';
 import { detectImageMediaType, ImageMediaType } from './image-media-type.js';
@@ -60,7 +60,7 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
         { persistent: true },
       );
 
-      await publishNotification(context.redis, outcome.result.settledNotification);
+      await publishNotification(context.redis, outcome.result.settledNotification, log);
 
       log.info('workout parsed', {
         workout_id: event.workout_id,
@@ -94,18 +94,22 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
         // publish today for a workout performed weeks ago, and the client uses
         // this field to decide which week a change concerns.
         if (settled) {
-          await publishNotification(context.redis, {
-            type: WORKOUT_SETTLED_KEY,
-            // A fresh id and timestamp: the failure is its own occurrence, not
-            // the upload's. `event.occurred_at` is when the workout was
-            // submitted, which can be minutes and three retries ago.
-            event_id: randomUUID(),
-            user_id: settled.userId,
-            occurred_at: new Date().toISOString(),
-            workout_id: event.workout_id,
-            status: WorkoutStatus.FAILED,
-            performed_at: settled.performedAt.toISOString(),
-          });
+          await publishNotification(
+            context.redis,
+            {
+              type: WORKOUT_SETTLED_KEY,
+              // A fresh id and timestamp: the failure is its own occurrence, not
+              // the upload's. `event.occurred_at` is when the workout was
+              // submitted, which can be minutes and three retries ago.
+              event_id: randomUUID(),
+              user_id: settled.userId,
+              occurred_at: new Date().toISOString(),
+              workout_id: event.workout_id,
+              status: WorkoutStatus.FAILED,
+              performed_at: settled.performedAt.toISOString(),
+            },
+            log,
+          );
         }
       } catch (markErr) {
         log.error('failed to mark workout failed', { workout_id: event.workout_id, err: markErr });

@@ -1,26 +1,27 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import Redis from 'ioredis';
 
-import { ChangeNotification, getEventsChannelName } from '@workout-logging/shared';
+import { ChangeNotification, createLogger, publishNotification } from '@workout-logging/shared';
 
 import { REDIS_CLIENT } from '../redis/redis.module';
 
+// Exists only to hand `publishNotification` the injected Redis client — the
+// publishing itself, the channel name, the encoding and the never-throw
+// guarantee all live in packages/shared, shared with apps/worker, which
+// publishes to the same channels. There is no apps/api variant of any of that,
+// and there must not be: one line of drift between the two would be a
+// notification nobody receives, with no error anywhere to say so.
+//
+// `createLogger('api')` rather than Nest's `new Logger(...)`: the shared
+// publisher takes an AppLogger, and apps/api's Nest logging is already an
+// adapter onto exactly this (common/structured-logger.ts), so the line comes
+// out as the same `{ts,level,svc:"api",...}` object either way.
 @Injectable()
 export class NotificationsPublisher {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
-  private readonly logger = new Logger(NotificationsPublisher.name);
+  private readonly log = createLogger('api');
 
   async publish(notification: ChangeNotification): Promise<void> {
-    try {
-      await this.redis.publish(
-        getEventsChannelName(notification.user_id),
-        JSON.stringify(notification),
-      );
-    } catch (err) {
-      this.logger.error(
-        `Redis publish failed: ${notification.type} ${notification.event_id} for ${notification.user_id}`,
-        err instanceof Error ? err.stack : undefined,
-      );
-    }
+    await publishNotification(this.redis, notification, this.log);
   }
 }
