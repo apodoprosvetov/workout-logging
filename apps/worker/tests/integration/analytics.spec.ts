@@ -4,10 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  ANALYTICS_UPDATED_KEY,
   connectRabbitMq,
   createMongooseConnection,
   createRedisClient,
+  createRedisSubscriber,
   createTypeOrmDataSource,
+  getEventsChannelName,
   isoWeekKey,
   seedExerciseCatalog,
   setupRabbitMqTopology,
@@ -29,6 +32,7 @@ import {
 import { registerAnalyticsConsumer } from '../../src/analytics/handler.js';
 
 import type { WorkerContext } from '../../src/index.js';
+import type { AnalyticsUpdatedNotification } from '@workout-logging/shared';
 import type { Channel, ChannelModel } from 'amqplib';
 import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
@@ -330,4 +334,115 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     const after = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
     expect(after).toBe(before - 200);
   }, 15000);
+
+  // T036. Not "both happened" — the order, which is the whole requirement: a
+  // notification is an invitation to refetch, so announcing a recomputation
+  // that has not committed races every listening client into reading the
+  // figures the pipeline was about to replace.
+  //
+  // Asserted with MONITOR rather than by reading the hash when the notification
+  // arrives. That reading proves nothing: time passes between the message
+  // landing and the read, so a write that happened *after* the publish would
+  // still be visible by then, and the test would pass on the broken order.
+  // MONITOR reports the commands the server actually executed, in the order it
+  // executed them, so the comparison is on the real sequence.
+  describe('T036: analytics.updated is published after the hash is written', () => {
+    const channelName = () => getEventsChannelName(userId);
+    const volumeKey = () => weeklyVolumeRedisKey(userId, week);
+
+    /**
+     * Runs `trigger`, waits for the notification, and returns the server-side
+     * order of the two commands that matter.
+     *
+     * MONITOR sees every client's traffic on this Redis, so both filters are on
+     * *this* user's key and channel — a dev worker or another suite running
+     * against the same instance would otherwise show up in the log.
+     */
+    async function orderOf(trigger: () => void): Promise<{
+      hsetIndex: number;
+      publishIndex: number;
+      notification: AnalyticsUpdatedNotification | null;
+    }> {
+      const monitorClient = createRedisClient();
+      const monitor = await monitorClient.monitor();
+      const commands: string[][] = [];
+      monitor.on('monitor', (_time: string, args: string[]) => commands.push(args));
+
+      const subscriber = createRedisSubscriber();
+      let notification: AnalyticsUpdatedNotification | null = null;
+      const delivered = new Promise<void>((resolve) => {
+        subscriber.on('message', (_channel: string, payload: string) => {
+          const parsed = JSON.parse(payload) as AnalyticsUpdatedNotification;
+          if (parsed.type === ANALYTICS_UPDATED_KEY) {
+            notification = parsed;
+            resolve();
+          }
+        });
+      });
+      await subscriber.subscribe(channelName());
+
+      try {
+        trigger();
+        await Promise.race([delivered, new Promise((r) => setTimeout(r, 10_000))]);
+        // The monitor stream is asynchronous; give the last commands a moment to
+        // arrive before reading the log.
+        await new Promise((r) => setTimeout(r, 300));
+
+        const isOurs = (args: string[], name: string, target: string) =>
+          args[0]?.toLowerCase() === name && args[1] === target;
+
+        return {
+          hsetIndex: commands.findIndex((a) => isOurs(a, 'hset', volumeKey())),
+          publishIndex: commands.findIndex((a) => isOurs(a, 'publish', channelName())),
+          notification,
+        };
+      } finally {
+        monitor.disconnect();
+        monitorClient.disconnect();
+        subscriber.disconnect();
+      }
+    }
+
+    it('writes the hash before announcing it, on the parsed path', async () => {
+      const id = await seedParsedWorkout('2026-05-05T00:00:00.000Z', [
+        { slug: 'bench-press', sets: [{ weight: 60, reps: 5 }] },
+      ]);
+
+      const { hsetIndex, publishIndex, notification } = await orderOf(() => publishParsed(id));
+
+      expect(notification).not.toBeNull();
+      expect(notification?.iso_week).toBe(week);
+      // Both present, and in this order. `toBeGreaterThan`, not `not.toBe`: the
+      // point is which came first, and -1 for a missing command would sail
+      // through a mere inequality.
+      expect(hsetIndex).toBeGreaterThanOrEqual(0);
+      expect(publishIndex).toBeGreaterThan(hsetIndex);
+    }, 20000);
+
+    it('writes the hash before announcing it, on the deleted path too', async () => {
+      // The path whose week cannot be derived — the workout is gone by the time
+      // the handler runs, so `iso_week` has to come from the payload.
+      const performedAt = '2026-05-06T00:00:00.000Z';
+      const id = await seedParsedWorkout(performedAt, [
+        { slug: 'squat', sets: [{ weight: 80, reps: 5 }] },
+      ]);
+      publishParsed(id);
+      await new Promise((r) => setTimeout(r, 900));
+
+      await dataSource.query(
+        'DELETE FROM sets WHERE workout_exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id = $1)',
+        [id],
+      );
+      await dataSource.query('DELETE FROM workout_exercises WHERE workout_id = $1', [id]);
+      await dataSource.query('DELETE FROM workouts WHERE id = $1', [id]);
+
+      const { hsetIndex, publishIndex, notification } = await orderOf(() =>
+        publishDeleted(id, performedAt),
+      );
+
+      expect(notification?.iso_week).toBe(week);
+      expect(hsetIndex).toBeGreaterThanOrEqual(0);
+      expect(publishIndex).toBeGreaterThan(hsetIndex);
+    }, 20000);
+  });
 });
