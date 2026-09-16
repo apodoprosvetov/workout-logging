@@ -7,7 +7,25 @@ import { isoWeekKey } from '@lib/weeks';
 import { loadTokens, subscribeToSession } from './api-client';
 import { startEventStream } from './event-stream';
 
-import type { ChangeNotification, NotificationType } from '@workout-logging/shared';
+import type {
+  ChangeNotification,
+  NotificationType,
+  SettledWorkoutStatus,
+} from '@workout-logging/shared';
+
+// A literal, not `WORKOUT_SETTLED_KEY` imported from @workout-logging/shared.
+// The dependency on that package is type-only here, and it has to stay that
+// way: its barrel pulls in ioredis, amqplib and mongoose, none of which belong
+// in a browser bundle. `import type` is erased before anything resolves, but a
+// value import emits a real require — and the failure is not a type error, it
+// is `Can't resolve 'dns'` at build time, long after typecheck and the node-env
+// tests have both gone green. Same reasoning, and the same shape, as
+// NOTIFICATION_TYPES in event-stream.ts and isoWeekKey in lib/weeks.ts.
+// `satisfies`, not a `NotificationType` annotation: an annotation widens this
+// to the whole union, and then comparing `notification.type` against it narrows
+// nothing — `workout_id` and `status` stop existing on the result. This checks
+// the literal is a real notification type while leaving it a literal.
+const WORKOUT_SETTLED = 'workout.settled' satisfies NotificationType;
 
 // Carries "a workout was just logged" from the header's logging form
 // (features/log-workout/log-workout-form.tsx) to whatever lists are mounted:
@@ -35,24 +53,35 @@ export interface WorkoutLogSnapshot {
   readonly revision: number;
 
   /**
-   * Who caused this change.
+   * How this change relates to this tab. Three values, and they are ordered
+   * from nearest to furthest:
    *
-   * `local` — this tab did it: the logging form, or a delete this tab issued.
-   * `remote` — it arrived over the notification channel, from the worker or
-   * from this user's other tab or device.
+   * `local` — this tab did it and already knows: the logging form submitted, or
+   * a row was deleted here. Never a notification.
    *
-   * This is the field that keeps FR-018 honest. Only the session that logged a
-   * workout may follow it to its week, so the dashboard checks `origin` before
-   * acting on `performedAt` — a workout logged on another device must never
-   * pull this screen anywhere (US3 scenario 3).
+   * `own-workout` — a notification about a workout this tab logged, coming back
+   * from the worker once it settled. Deliberately *not* `local`: this tab did
+   * not cause it and did not know it was coming, and the date it carries may
+   * differ from the one submitted, because the parser can move a workout to a
+   * date it found in the text.
    *
-   * It also settles the race T020 recorded. The alternative was to blank the
-   * date on every remote change, which breaks the moment T038 starts publishing
-   * `workout.created`: this tab's own POST echoes back milliseconds later and
-   * would erase the date its week switch depends on. Judging by origin needs no
-   * such blanking, so the echo is simply ignored instead of destructive.
+   * `remote` — a notification about anything else: another tab, another device,
+   * or a week's volume being recomputed.
+   *
+   * One field rather than a pair, and this is what the pair could not express:
+   * `own-workout` is exactly the case FR-018 permits to move the dashboard, and
+   * with a separate boolean beside a two-value origin, "this tab submitted it
+   * AND it settled elsewhere" was a state the types allowed and nothing could
+   * ever produce. Three named values leave no unreachable fourth.
+   *
+   * This is also what settles the race T020 recorded. The alternative was to
+   * blank the date on every remote change, which breaks the moment T038 starts
+   * publishing `workout.created`: this tab's own POST echoes back milliseconds
+   * later and would erase the date the week switch depends on. A `created` echo
+   * is not a settle, so it does not reach `own-workout`, and nothing has to be
+   * destroyed to keep it from navigating.
    */
-  readonly origin: 'local' | 'remote';
+  readonly origin: 'local' | 'own-workout' | 'remote';
 
   /**
    * Which kind of notification this was, or null for a local change — local
@@ -89,6 +118,17 @@ export interface WorkoutLogSnapshot {
    */
   readonly performedAt: string | null;
   readonly isoWeek: string | null;
+
+  /**
+   * The status a `workout.settled` carried, or null for every other change.
+   *
+   * FR-018's second condition turns on it: a workout that settled to `failed`
+   * has nowhere to navigate to — it stays in the in-flight surface until
+   * dismissed (FR-014) — so only `parsed` and `needs_review` may move a week.
+   * Reported as the fact rather than as a "may navigate" flag, because the rule
+   * belongs with the requirement, in the dashboard.
+   */
+  readonly settledStatus: SettledWorkoutStatus | null;
 }
 
 // One frozen object per publish. useSyncExternalStore calls getSnapshot on
@@ -97,15 +137,26 @@ export interface WorkoutLogSnapshot {
 // also makes it safe to use the snapshot itself as an effect dependency.
 const INITIAL: WorkoutLogSnapshot = Object.freeze({
   revision: 0,
-  // `local` rather than a third "nothing has happened" value: consumers key off
-  // `revision`, which is 0 here and so never fires an effect, making the origin
-  // of a change that has not happened unobservable. A third value would have to
-  // be handled in every switch for a state no consumer can reach.
+  // `local` rather than a fourth "nothing has happened yet" value: consumers key
+  // off `revision`, which is 0 here and so never fires an effect, making the
+  // origin of a change that has not happened unobservable. Adding a value for it
+  // would mean every reader handling a case none of them can reach.
   origin: 'local',
   changeType: null,
   performedAt: null,
   isoWeek: null,
+  settledStatus: null,
 });
+
+// The workouts this tab created and has not yet seen settle.
+//
+// Small and self-draining: an id goes in when `publishWorkoutLogged` reports a
+// successful POST and comes out the moment any `workout.settled` names it —
+// including a `failed` one, which must stop being tracked even though it never
+// navigates. What can linger is a workout whose settle never arrives at all
+// (the worker is down, or the channel missed it while offline); that is bounded
+// by how many workouts one person logs in one tab, and the ids go with the tab.
+const loggedInThisTab = new Set<string>();
 
 let snapshot: WorkoutLogSnapshot = INITIAL;
 const listeners = new Set<() => void>();
@@ -157,19 +208,18 @@ export function subscribe(listener: () => void): () => void {
   };
 }
 
-function publish(
-  origin: WorkoutLogSnapshot['origin'],
-  changeType: NotificationType | null,
-  performedAt: string | null,
-  isoWeek: string | null,
-): void {
-  snapshot = Object.freeze({
-    revision: snapshot.revision + 1,
-    origin,
-    changeType,
-    performedAt,
-    isoWeek,
-  });
+/**
+ * Replace the snapshot and notify.
+ *
+ * Takes the whole change as one object rather than a positional list. Most of
+ * these fields are `string | null`, so a transposed pair would typecheck
+ * cleanly and then be wrong somewhere far away — a week key in the date field
+ * silently stops every week filter matching. Named fields also make adding one
+ * a compile error at each call site, which is where the decision belongs:
+ * whether a deletion has a week is not a question this function can answer.
+ */
+function publish(change: Omit<WorkoutLogSnapshot, 'revision'>): void {
+  snapshot = Object.freeze({ revision: snapshot.revision + 1, ...change });
   // Iterate a copy: a listener may unsubscribe (or a component may mount and
   // subscribe) while React processes the notification.
   for (const listener of [...listeners]) listener();
@@ -193,7 +243,22 @@ function publish(
  */
 function publishRemote(notification: ChangeNotification): void {
   const performedAt = 'performed_at' in notification ? notification.performed_at : null;
-  publish('remote', notification.type, performedAt, weekOf(notification));
+  const settled = notification.type === WORKOUT_SETTLED ? notification : null;
+
+  // A settle closes the book on that workout: whatever it settled to, this tab
+  // has no further use for the id. Deleting on `failed` as well as on the two
+  // successes is what keeps the set from growing for the rest of the session —
+  // and what stops a redelivered settle from being claimed twice, which would
+  // navigate a second time long after the user moved on (FR-020).
+  const ourWorkout = settled !== null && loggedInThisTab.delete(settled.workout_id);
+
+  publish({
+    origin: ourWorkout ? 'own-workout' : 'remote',
+    changeType: notification.type,
+    performedAt,
+    isoWeek: weekOf(notification),
+    settledStatus: settled?.status ?? null,
+  });
 }
 
 /**
@@ -251,9 +316,27 @@ function closeChannel(): void {
  * `performedAt` is required rather than optional so the caller has to state
  * where the workout landed — see the field's note for how the form knows it
  * even when the user left the date blank.
+ *
+ * `workoutId` is what lets this tab recognise its own workout settling, minutes
+ * and a worker later, when the notification comes back over a channel every
+ * other tab and device is listening to as well (FR-018's first condition).
+ *
+ * Note what this publish does *not* do: the origin is `local`, not
+ * `own-workout`. Submitting is not settling, and the dashboard no longer
+ * follows a workout at submission
+ * — contracts/ui.md narrowed spec 003's FR-012 to fire when the workout settles
+ * instead, which is both the moment the user is watching it in the in-flight
+ * surface and the first moment its final date is known.
  */
-export function publishWorkoutLogged(performedAt: string): void {
-  publish('local', null, performedAt, isoWeekKey(new Date(performedAt)));
+export function publishWorkoutLogged(workoutId: string, performedAt: string): void {
+  loggedInThisTab.add(workoutId);
+  publish({
+    origin: 'local',
+    changeType: null,
+    performedAt,
+    isoWeek: isoWeekKey(new Date(performedAt)),
+    settledStatus: null,
+  });
 }
 
 /**
@@ -272,7 +355,13 @@ export function publishWorkoutLogged(performedAt: string): void {
  * to do: the deleted workout may well have been in the week on screen.
  */
 export function publishWorkoutDeleted(): void {
-  publish('local', null, null, null);
+  publish({
+    origin: 'local',
+    changeType: null,
+    performedAt: null,
+    isoWeek: null,
+    settledStatus: null,
+  });
 }
 
 /**

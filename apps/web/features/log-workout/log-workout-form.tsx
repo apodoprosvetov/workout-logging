@@ -125,12 +125,16 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
         fileInputRef.current.value = '';
       }
 
-      // Tell whatever lists are on screen (FR-011), and where the workout
-      // landed so the dashboard can follow it (FR-012). The date comes from the
+      // Tell whatever lists are on screen (FR-011). The date comes from the
       // response, not from this form's field: when the field is blank the
       // server picks the date, and recomputing it here would duplicate a
       // decision that is the server's (contracts/api.md, POST /workouts).
-      publishWorkoutLogged(created.performed_at);
+      //
+      // The id goes with it so the store can recognise this workout settling
+      // later and let the dashboard follow it then (FR-018's one exception).
+      // Following it *now* would aim at a date the parser may still change, and
+      // at a workout with nothing in it yet.
+      publishWorkoutLogged(created.workout_id, created.performed_at);
 
       onLogged();
     } catch {

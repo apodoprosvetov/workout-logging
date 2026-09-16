@@ -29,11 +29,12 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
   const { revision, isoWeek } = useWorkoutLog();
   const seenRevision = useRef(revision);
 
-  // Guards against an out-of-order response overwriting a newer one. Logging a
-  // workout into another week fires two loads in quick succession — one for the
-  // week on screen, then one for the week the dashboard jumps to (FR-012) — and
-  // nothing cancels the first. Without this the older, usually empty, response
-  // can land last and blank the panel. Seen live during the quickstart pass.
+  // Guards against an out-of-order response overwriting a newer one. A workout
+  // settling into another week fires two loads in quick succession — one for the
+  // week on screen, then one for the week the dashboard follows it to (FR-018's
+  // one exception) — and nothing cancels the first. Without this the older,
+  // usually empty, response can land last and blank the panel. Seen live during
+  // the quickstart pass, when the jump still happened at submission.
   const requestSeq = useRef(0);
 
   /**
