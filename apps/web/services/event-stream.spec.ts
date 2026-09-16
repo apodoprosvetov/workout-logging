@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { backoffDelay, parseFrames } from './event-stream';
+import { apiFetch } from './api-client';
+import { applyJitter, backoffDelay, parseFrames, startEventStream } from './event-stream';
+
+// Only `apiFetch` is replaced — `ApiError` stays real, because the stream
+// constructs one itself for a non-ok response and a stub would make that
+// construction untested.
+vi.mock('./api-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api-client')>()),
+  apiFetch: vi.fn(),
+}));
 
 // The parser is the one piece of this feature that is pure input/output, and
 // also the easiest to get subtly wrong: a stream arrives in arbitrary chunks,
@@ -281,5 +290,338 @@ describe('backoffDelay', () => {
       expect(delay).toBeGreaterThanOrEqual(0);
       expect(delay).toBeLessThanOrEqual(ceiling);
     }
+  });
+});
+
+// Written against the contract rather than the implementation — the exact base
+// and ceiling are a judgement call, so most of these assert properties that
+// hold whatever numbers were picked.
+describe('applyJitter', () => {
+  const draws = (r: number) => () => r;
+
+  it('leaves an immediate reconnect immediate', () => {
+    // backoffDelay(0) is 0 on purpose — the routine token-expiry reopen. Jitter
+    // must not smear a delay back onto it, so this holds for every draw.
+    for (const r of [0, 0.5, 1]) {
+      expect(applyJitter(0, draws(r))).toBe(0);
+    }
+  });
+
+  it('never returns more than the delay it was given', () => {
+    // The ceiling is load-bearing for SC-007: a jittered delay that could
+    // exceed it would put the worst case outside the 10s recovery budget the
+    // unjittered curve was chosen to fit inside.
+    for (const delay of [250, 1000, 5000]) {
+      expect(applyJitter(delay, draws(1))).toBeLessThanOrEqual(delay);
+    }
+  });
+
+  it('never drops below half the delay', () => {
+    // This is the half that FR-022 needs. "Full jitter" (random() * delay) has
+    // no floor, so a client at the 5s ceiling can still draw single-digit
+    // milliseconds and retry a dead server in what is effectively a tight loop.
+    for (const delay of [250, 1000, 5000]) {
+      expect(applyJitter(delay, draws(0))).toBe(delay / 2);
+    }
+  });
+
+  it('actually spreads clients out across the range', () => {
+    // Guards against a "jitter" that returns a constant — which would satisfy
+    // both bounds above while leaving a restarted replica's clients returning
+    // in step, the one thing this function exists to prevent.
+    const spread = new Set([0, 0.25, 0.5, 0.75, 1].map((r) => applyJitter(5000, draws(r))));
+
+    expect(spread.size).toBe(5);
+  });
+
+  it('is monotonic in the draw', () => {
+    expect(applyJitter(5000, draws(0.25))).toBeLessThan(applyJitter(5000, draws(0.75)));
+  });
+
+  it('survives a generator that returns nonsense', () => {
+    // Not a promise about *what* these produce — only that a broken or
+    // out-of-range generator cannot turn into a negative or unbounded timer.
+    for (const r of [NaN, -1, 2, Infinity]) {
+      const delay = applyJitter(4000, draws(r));
+      expect(delay).toBeGreaterThanOrEqual(2000);
+      expect(delay).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  it('survives nonsense input without returning nonsense', () => {
+    for (const delay of [-1, NaN, Number.NEGATIVE_INFINITY]) {
+      expect(applyJitter(delay, draws(0.5))).toBe(0);
+    }
+  });
+
+  it('defaults to Math.random, so no caller has to supply one', () => {
+    const delay = applyJitter(5000);
+
+    expect(delay).toBeGreaterThanOrEqual(2500);
+    expect(delay).toBeLessThanOrEqual(5000);
+  });
+});
+
+// Behavioural, not unit: what these assert is the *shape of the retry traffic*
+// a permanently broken backend sees, which is the only level at which "backs
+// off rather than retries in a tight loop" and "gives up, but recoverably"
+// mean anything. Time is faked, so a thirty-minute outage costs milliseconds.
+describe('startEventStream reconnection', () => {
+  const fetchMock = vi.mocked(apiFetch);
+  const GIVE_UP_AFTER_MS = 30 * 60_000;
+
+  /** Mutable `visibilityState`; `window` only ever needs to dispatch `online`. */
+  let fakeDocument: EventTarget & { visibilityState: 'visible' | 'hidden' };
+  let fakeWindow: EventTarget;
+  /** Spied so a test can assert on *un*registration, which dispatching cannot show. */
+  let windowRemove: ReturnType<typeof vi.spyOn>;
+  let documentRemove: ReturnType<typeof vi.spyOn>;
+
+  /** When each connection attempt was made, on the fake clock. */
+  let attemptedAt: number[];
+
+  function startFailingStream(onGiveUp?: () => void): () => void {
+    return startEventStream({ onNotification: () => {}, onGiveUp });
+  }
+
+  /** Gaps between consecutive attempts — gap[i] is the delay before attempt i+1. */
+  function gaps(): number[] {
+    return attemptedAt.slice(1).map((at, i) => at - attemptedAt[i]);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    attemptedAt = [];
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(() => {
+      attemptedAt.push(Date.now());
+      return Promise.reject(new Error('backend unreachable'));
+    });
+
+    // Every failed attempt logs; without this the suite prints hundreds of
+    // lines of expected noise and buries a genuine warning.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    fakeWindow = new EventTarget();
+    fakeDocument = Object.assign(new EventTarget(), {
+      visibilityState: 'visible' as 'visible' | 'hidden',
+    });
+    windowRemove = vi.spyOn(fakeWindow, 'removeEventListener');
+    documentRemove = vi.spyOn(fakeDocument, 'removeEventListener');
+    vi.stubGlobal('window', fakeWindow);
+    vi.stubGlobal('document', fakeDocument);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('opens the first connection without waiting', async () => {
+    const stop = startFailingStream();
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/events', expect.anything());
+  });
+
+  it('keeps every retry inside the jittered band for its attempt', async () => {
+    const stop = startFailingStream();
+    await vi.advanceTimersByTimeAsync(60_000);
+    stop();
+
+    gaps().forEach((gap, i) => {
+      const unjittered = backoffDelay(i + 1);
+      expect(gap).toBeGreaterThanOrEqual(Math.floor(unjittered / 2));
+      expect(gap).toBeLessThanOrEqual(unjittered);
+    });
+  });
+
+  it('does not return in step — the delays vary', async () => {
+    const stop = startFailingStream();
+    await vi.advanceTimersByTimeAsync(120_000);
+    stop();
+
+    // Sampled from the flat part of the curve, where an unjittered client would
+    // produce one value repeated: every difference here is jitter, not growth.
+    const atCeiling = gaps().slice(8);
+
+    expect(atCeiling.length).toBeGreaterThan(5);
+    expect(new Set(atCeiling).size).toBeGreaterThan(1);
+  });
+
+  it('stays at the ceiling instead of cycling back to zero', async () => {
+    // Regression: the healthy-connection window used to open *before* the
+    // backoff sleep, so the sleep counted toward the connection's own lifetime.
+    // Once the delay reached the 5s ceiling it satisfied MIN_HEALTHY_CONNECTION_MS
+    // on its own, every failing cycle scored as healthy, and the delays
+    // sawtoothed 0→250→…→5000→0 forever against a backend that was never once
+    // reachable — with `failingSince` cleared each lap, so the give-up below
+    // could never be reached either.
+    //
+    // Pinned to the top of the jitter band deliberately. Jitter *hides* this
+    // bug: a 3.4s draw does not reach the 5s threshold, so the reset fires only
+    // on a near-maximum draw and a test on real randomness would catch it a few
+    // times in a hundred. At draw 1 the delay is exactly the ceiling, which is
+    // the boundary the comparison gets wrong, and the sawtooth is certain.
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+
+    const stop = startFailingStream();
+    await vi.advanceTimersByTimeAsync(120_000);
+    stop();
+
+    const atCeiling = gaps().slice(8);
+
+    expect(atCeiling.length).toBeGreaterThan(5);
+    for (const gap of atCeiling) {
+      expect(gap).toBe(5000);
+    }
+  });
+
+  it('is still retrying well past the five minutes SC-007 allows for', async () => {
+    const onGiveUp = vi.fn();
+    const stop = startFailingStream(onGiveUp);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const beforeGiveUpWindow = fetchMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    stop();
+
+    // SC-007 promises recovery after an interruption of up to five minutes, so
+    // abandoning the channel anywhere near that mark would break it outright.
+    expect(onGiveUp).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(beforeGiveUpWindow);
+  });
+
+  it('gives up once, and then stops generating traffic', async () => {
+    const onGiveUp = vi.fn();
+    const stop = startFailingStream(onGiveUp);
+
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
+    const afterGivingUp = fetchMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    stop();
+
+    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    // The point of giving up: ten further minutes cost nothing at all.
+    expect(fetchMock.mock.calls.length).toBe(afterGivingUp);
+  });
+
+  it('never throws out of the stream, however long it fails', async () => {
+    // FR-026: losing the channel is an enhancement lost, not a failure state.
+    // A rejection escaping `run()` would surface as an unhandled rejection in
+    // the app that mounted the store.
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+
+    const stop = startFailingStream();
+    await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
+    stop();
+    await vi.advanceTimersByTimeAsync(0);
+    process.off('unhandledRejection', unhandled);
+
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  describe('after giving up', () => {
+    /** Runs a stream to exhaustion and returns it still stopped-but-alive. */
+    async function givenGivenUp(): Promise<{ stop: () => void; attemptsSoFar: number }> {
+      const stop = startFailingStream();
+      await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
+      return { stop, attemptsSoFar: fetchMock.mock.calls.length };
+    }
+
+    it('resumes immediately when the network comes back', async () => {
+      const { stop, attemptsSoFar } = await givenGivenUp();
+
+      fakeWindow.dispatchEvent(new Event('online'));
+      await vi.advanceTimersByTimeAsync(0);
+      stop();
+
+      // Attempt 0, not the ceiling it had earned: `online` is evidence the
+      // world changed, so nothing is gained by making the user wait it out.
+      expect(fetchMock.mock.calls.length).toBe(attemptsSoFar + 1);
+    });
+
+    it('resumes when a backgrounded tab is looked at again', async () => {
+      // The case that would otherwise strand a user: a laptop closed overnight,
+      // where the network was never broken because there was no network.
+      const { stop, attemptsSoFar } = await givenGivenUp();
+
+      fakeDocument.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+      stop();
+
+      expect(fetchMock.mock.calls.length).toBe(attemptsSoFar + 1);
+    });
+
+    it('ignores a tab going hidden', async () => {
+      const { stop, attemptsSoFar } = await givenGivenUp();
+
+      fakeDocument.visibilityState = 'hidden';
+      fakeDocument.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(1000);
+      stop();
+
+      expect(fetchMock.mock.calls.length).toBe(attemptsSoFar);
+    });
+
+    it('resumes only once when both signals arrive together', async () => {
+      // Waking a laptop fires `online` and `visibilitychange` within a frame of
+      // each other, and two live loops would double every subsequent retry —
+      // so `resume` has to be idempotent, not merely correct once.
+      const { stop, attemptsSoFar } = await givenGivenUp();
+
+      fakeWindow.dispatchEvent(new Event('online'));
+      fakeDocument.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+      stop();
+
+      expect(fetchMock.mock.calls.length).toBe(attemptsSoFar + 1);
+    });
+
+    it('gives up again if the resumed stream fails just as long', async () => {
+      const onGiveUp = vi.fn();
+      const stop = startFailingStream(onGiveUp);
+      await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
+      expect(onGiveUp).toHaveBeenCalledTimes(1);
+
+      fakeWindow.dispatchEvent(new Event('online'));
+      await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
+      stop();
+
+      // The give-up budget is a fresh half hour, not a lifetime total — a
+      // one-shot bound would leave a resumed stream retrying forever.
+      expect(onGiveUp).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets go of the window and document once stopped', async () => {
+      // Behaviourally invisible — `resume` checks `stopped` and would decline
+      // anyway — so nothing else in this suite can see it. What it costs is a
+      // leak: the listeners close over the whole stream, and a store that
+      // opened and tore down a channel per navigation would pin every one of
+      // them to the page for as long as the tab lives.
+      const { stop } = await givenGivenUp();
+
+      stop();
+
+      expect(windowRemove).toHaveBeenCalledWith('online', expect.any(Function));
+      expect(documentRemove).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    });
+
+    it('stays stopped once the caller stops it', async () => {
+      const { stop, attemptsSoFar } = await givenGivenUp();
+      stop();
+
+      fakeWindow.dispatchEvent(new Event('online'));
+      fakeDocument.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // A store that tore the channel down on unmount must not find it
+      // resurrected by a network event minutes later.
+      expect(fetchMock.mock.calls.length).toBe(attemptsSoFar);
+    });
   });
 });

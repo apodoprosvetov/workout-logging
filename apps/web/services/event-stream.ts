@@ -135,6 +135,38 @@ export function backoffDelay(attempt: number) {
   return Math.min(calculatedDelay, MAX_DELAY);
 }
 
+/**
+ * Spread a backoff delay out so a fleet of clients does not return in step.
+ *
+ * Equal jitter — half the delay fixed, half random — rather than the "full
+ * jitter" of `random() * delay`. The difference matters because of what this
+ * backoff is defending against: an API replica that restarts drops every
+ * connection it holds at the same instant, and with full jitter a client that
+ * has climbed to the 5s ceiling can still draw 12ms, so the herd never really
+ * thins at the low end. FR-022's "back off rather than retry in a tight loop"
+ * has to survive the randomisation, so the floor is kept at half the curve and
+ * the spread is what stops the returns from being simultaneous.
+ *
+ * Zero stays zero. Attempt 0 is the routine token-expiry reopen, and jittering
+ * it would reintroduce the every-15-minutes gap `backoffDelay` exists to avoid.
+ *
+ * `random` is a parameter so the tests can pin the draw instead of stubbing a
+ * global; the default keeps every caller unaware of it.
+ */
+export function applyJitter(delay: number, random: () => number = Math.random): number {
+  // Also catches NaN, which fails every comparison and would otherwise reach
+  // setTimeout as an immediate fire — the tight loop, arrived at sideways.
+  if (!(delay > 0)) return 0;
+
+  const draw = random();
+  // A generator that returns nonsense must not turn into an unbounded or
+  // negative timer; falling back to the midpoint keeps the delay on the curve.
+  const bounded = Number.isFinite(draw) ? Math.min(Math.max(draw, 0), 1) : 0.5;
+
+  const half = delay / 2;
+  return Math.round(half + half * bounded);
+}
+
 /** The frame name the server uses for its keep-alive (contracts/api.md). */
 const HEARTBEAT_EVENT = 'heartbeat';
 
@@ -149,6 +181,22 @@ const HEARTBEAT_EVENT = 'heartbeat';
  */
 const MIN_HEALTHY_CONNECTION_MS = 5000;
 
+/**
+ * How long a run of failures may last before the client stops retrying.
+ *
+ * Bounded by elapsed time rather than by a count of attempts, because an
+ * attempt's cost is not fixed: a refused connection fails in milliseconds while
+ * one swallowed by a captive portal can hang for thirty seconds, so the same
+ * attempt count spans ten minutes or an hour depending on how the network is
+ * broken. Only a clock bounds both the same way.
+ *
+ * Thirty minutes is chosen against SC-007, which requires recovery after an
+ * interruption of up to five minutes: the budget has to clear that by enough
+ * that a slightly longer outage is still ridden out, not abandoned. Well short
+ * of a lunch break, which is what `resume` below is for.
+ */
+const GIVE_UP_AFTER_MS = 30 * 60_000;
+
 export interface EventStreamHandlers {
   /** One parsed notification. Called once per settled, created, deleted or analytics frame. */
   onNotification: (notification: ChangeNotification) => void;
@@ -160,20 +208,35 @@ export interface EventStreamHandlers {
    * claims (FR-025). Optional so T018 works without it.
    */
   onHeartbeat?: () => void;
+  /**
+   * Called once when reconnection is abandoned after `GIVE_UP_AFTER_MS`, and
+   * again on every later give-up if the stream was resumed in between.
+   *
+   * Not an error channel — nothing has gone wrong that the caller can fix, and
+   * FR-026 is explicit that losing the channel is not a failure state. It is
+   * the seam T044 needs to hold the store at `offline` so screens stop implying
+   * their data is live (FR-025).
+   */
+  onGiveUp?: () => void;
 }
 
 /** Resolves after `ms`, or as soon as `signal` aborts — a pending backoff must not delay a stop. */
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    // The listener is removed on the ordinary path too, not only by `once`.
+    // `once` fires on abort, which for a channel that is working never happens,
+    // so without this every backoff leaves a dead listener on a signal that
+    // lives as long as the stream — hundreds of them across a long outage, and
+    // Node starts warning about a leak somewhere around ten.
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -197,12 +260,26 @@ function isAbortError(err: unknown): boolean {
  * backoff is therefore how long a connection *lasted*, not whether opening it
  * succeeded — see the note in `run()` for why the obvious alternative produces
  * a tight loop.
+ *
+ * Retrying is bounded: after thirty minutes in which nothing connected the loop
+ * stops and `onGiveUp` fires, and `online` or the tab becoming visible starts it
+ * again. Nothing here throws or blocks at any point in that — every screen keeps
+ * working off its own fetches whether this channel is up, down, or abandoned
+ * (FR-026).
+ *
+ * Call order, since this spans three functions that never call each other
+ * directly: `start` → `run` (loop: `sleep` → `connectAndRead` → `dispatch` per
+ * frame) → `giveUp` on a long enough failure run → the listeners it registers →
+ * `resume` → `start` again. The returned stop function short-circuits all of it.
  */
 export function startEventStream(handlers: EventStreamHandlers): () => void {
   const abortController = new AbortController();
   const { signal } = abortController;
   let stopped = false;
   let attempt = 0;
+  /** When the current run of failures began, or null while the channel is healthy. */
+  let failingSince: number | null = null;
+  let gaveUp = false;
 
   function dispatch(frame: SseFrame): void {
     if (frame.event === HEARTBEAT_EVENT) {
@@ -267,13 +344,21 @@ export function startEventStream(handlers: EventStreamHandlers): () => void {
   }
 
   async function run(): Promise<void> {
-    while (!stopped) {
+    while (!stopped && !gaveUp) {
+      await sleep(applyJitter(backoffDelay(attempt)), signal);
+      if (stopped) return;
+
+      // Started *after* the backoff, not before it. An earlier version opened
+      // the window around the sleep as well, and the arithmetic then quietly
+      // inverted itself: once the delay reached the 5s ceiling it alone met
+      // MIN_HEALTHY_CONNECTION_MS, so every cycle scored as healthy however
+      // fast the connection failed, the counter reset to 0, and a permanent
+      // outage cycled 0→250→…→5000 forever instead of settling at the ceiling.
+      // It also meant `failingSince` cleared on each lap, so the give-up below
+      // could never be reached at all.
       const startedAt = Date.now();
 
       try {
-        await sleep(backoffDelay(attempt), signal);
-        if (stopped) return;
-
         await connectAndRead();
       } catch (err) {
         // Our own stop, not a failure. Nothing to log, nothing to retry.
@@ -293,14 +378,88 @@ export function startEventStream(handlers: EventStreamHandlers): () => void {
       // Judging by duration also collapses two rules into one: a long-lived
       // stream that errors mid-flight reconnects immediately, while anything
       // short-lived backs off, however it ended.
-      attempt = Date.now() - startedAt >= MIN_HEALTHY_CONNECTION_MS ? 0 : attempt + 1;
+      if (Date.now() - startedAt >= MIN_HEALTHY_CONNECTION_MS) {
+        attempt = 0;
+        failingSince = null;
+        continue;
+      }
+
+      attempt += 1;
+      failingSince ??= startedAt;
+      if (Date.now() - failingSince >= GIVE_UP_AFTER_MS) giveUp();
     }
   }
 
-  void run();
+  function start(): void {
+    if (!stopped) void run();
+  }
+
+  /**
+   * Stop retrying, and arrange to be woken.
+   *
+   * Retrying a dead network every five seconds forever is not free — it is a
+   * timer and a failing request per client per five seconds — and after half an
+   * hour the odds that the next attempt is the one that works are poor. What
+   * makes stopping safe rather than terminal is that the two events which
+   * actually change those odds both fire: `online` when the interface comes
+   * back, and a tab becoming visible again, which is the shape of the case that
+   * would otherwise strand a user — a laptop closed overnight, where nothing
+   * was ever wrong with the network because there was no network at all.
+   */
+  function giveUp(): void {
+    gaveUp = true;
+    console.warn('[events] reconnects abandoned after 30m; resuming if the network or tab returns');
+    handlers.onGiveUp?.();
+    resumeListeners('add');
+  }
+
+  function resume(): void {
+    // `gaveUp` is what makes this safe to call twice, which matters because
+    // waking a laptop fires `online` and `visibilitychange` within a frame of
+    // each other. It is also why `start()` needs no guard of its own against a
+    // second loop: `giveUp` sets the flag and the loop condition reads it in
+    // the same synchronous stretch, so by the time any listener can run, `run`
+    // has already returned — there is never a loop still live to double.
+    if (stopped || !gaveUp) return;
+
+    resumeListeners('remove');
+    gaveUp = false;
+    // Attempt 0 is deliberate: whatever woke us is evidence the world changed,
+    // so the first try after it should be immediate rather than paying out the
+    // ceiling the previous half hour of failures had earned.
+    attempt = 0;
+    failingSince = null;
+    start();
+  }
+
+  function resumeIfVisible(): void {
+    if (document.visibilityState === 'visible') resume();
+  }
+
+  /**
+   * Both listeners in one place so `stop()` cannot remove a subset.
+   *
+   * Guarded on the globals rather than assumed: this module is imported into a
+   * Next app that also renders on the server and is unit-tested under vitest's
+   * `node` environment, and in neither does `window` exist. Nothing is lost
+   * there — no stream is opened on the server to give up on.
+   */
+  function resumeListeners(op: 'add' | 'remove'): void {
+    if (typeof window !== 'undefined') {
+      if (op === 'add') window.addEventListener('online', resume);
+      else window.removeEventListener('online', resume);
+    }
+    if (typeof document !== 'undefined') {
+      if (op === 'add') document.addEventListener('visibilitychange', resumeIfVisible);
+      else document.removeEventListener('visibilitychange', resumeIfVisible);
+    }
+  }
+
+  start();
 
   return () => {
     stopped = true;
+    resumeListeners('remove');
     abortController.abort();
   };
 }
