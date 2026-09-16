@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from './api-client';
 import { applyJitter, backoffDelay, parseFrames, startEventStream } from './event-stream';
 
+import type { ChannelStatus } from './event-stream';
+
 // Only `apiFetch` is replaced — `ApiError` stays real, because the stream
 // constructs one itself for a non-ok response and a stub would make that
 // construction untested.
@@ -380,8 +382,15 @@ describe('startEventStream reconnection', () => {
   /** When each connection attempt was made, on the fake clock. */
   let attemptedAt: number[];
 
-  function startFailingStream(onGiveUp?: () => void): () => void {
-    return startEventStream({ onNotification: () => {}, onGiveUp });
+  function startFailingStream(onStatus?: (status: ChannelStatus) => void): () => void {
+    return startEventStream({ onNotification: () => {}, onStatus });
+  }
+
+  /** `onStatus` spy plus the stream it is wired to, for the give-up assertions. */
+  function startWatchedStream(): { stop: () => void; statuses: ChannelStatus[] } {
+    const statuses: ChannelStatus[] = [];
+    const stop = startFailingStream((status) => statuses.push(status));
+    return { stop, statuses };
   }
 
   /** Gaps between consecutive attempts — gap[i] is the delay before attempt i+1. */
@@ -481,8 +490,7 @@ describe('startEventStream reconnection', () => {
   });
 
   it('is still retrying well past the five minutes SC-007 allows for', async () => {
-    const onGiveUp = vi.fn();
-    const stop = startFailingStream(onGiveUp);
+    const { stop } = startWatchedStream();
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     const beforeGiveUpWindow = fetchMock.mock.calls.length;
@@ -491,22 +499,36 @@ describe('startEventStream reconnection', () => {
 
     // SC-007 promises recovery after an interruption of up to five minutes, so
     // abandoning the channel anywhere near that mark would break it outright.
-    expect(onGiveUp).not.toHaveBeenCalled();
     expect(fetchMock.mock.calls.length).toBeGreaterThan(beforeGiveUpWindow);
   });
 
-  it('gives up once, and then stops generating traffic', async () => {
-    const onGiveUp = vi.fn();
-    const stop = startFailingStream(onGiveUp);
+  it('gives up, and then stops generating traffic', async () => {
+    const { stop, statuses } = startWatchedStream();
 
     await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
     const afterGivingUp = fetchMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     stop();
 
-    expect(onGiveUp).toHaveBeenCalledTimes(1);
+    expect(statuses.at(-1)).toBe('offline');
     // The point of giving up: ten further minutes cost nothing at all.
     expect(fetchMock.mock.calls.length).toBe(afterGivingUp);
+  });
+
+  it('reports connecting first, then offline once an attempt has failed', async () => {
+    const { stop, statuses } = startWatchedStream();
+
+    // Synchronously, before any timer has run: nothing has failed yet, so
+    // claiming `offline` on a fresh page load would flash a "not receiving
+    // updates" surface at every user on every visit.
+    expect(statuses).toEqual(['connecting']);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    stop();
+
+    // …but once a connection has actually failed, `connecting` would be the
+    // stale-as-live claim FR-025 forbids, for however long the outage runs.
+    expect(statuses).toEqual(['connecting', 'offline']);
   });
 
   it('never throws out of the stream, however long it fails', async () => {
@@ -583,18 +605,22 @@ describe('startEventStream reconnection', () => {
     });
 
     it('gives up again if the resumed stream fails just as long', async () => {
-      const onGiveUp = vi.fn();
-      const stop = startFailingStream(onGiveUp);
+      const { stop, statuses } = startWatchedStream();
       await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
-      expect(onGiveUp).toHaveBeenCalledTimes(1);
+      const attemptsBeforeResume = fetchMock.mock.calls.length;
 
       fakeWindow.dispatchEvent(new Event('online'));
       await vi.advanceTimersByTimeAsync(GIVE_UP_AFTER_MS + 60_000);
+      const attemptsAfterSecondGiveUp = fetchMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
       stop();
 
       // The give-up budget is a fresh half hour, not a lifetime total — a
-      // one-shot bound would leave a resumed stream retrying forever.
-      expect(onGiveUp).toHaveBeenCalledTimes(2);
+      // one-shot bound would leave a resumed stream retrying forever, and a
+      // never-reset `failingSince` would abandon it after a single attempt.
+      expect(fetchMock.mock.calls.length - attemptsBeforeResume).toBeGreaterThan(100);
+      expect(fetchMock.mock.calls.length).toBe(attemptsAfterSecondGiveUp);
+      expect(statuses.at(-1)).toBe('offline');
     });
 
     it('lets go of the window and document once stopped', async () => {
@@ -623,5 +649,307 @@ describe('startEventStream reconnection', () => {
       // resurrected by a network event minutes later.
       expect(fetchMock.mock.calls.length).toBe(attemptsSoFar);
     });
+  });
+});
+
+// The heartbeat is the only evidence the client has that a channel still
+// works, so these drive a real `ReadableStream` rather than a rejecting stub:
+// the cases that matter — a socket that is open and silent, one cut by an
+// intermediary that never reports it — are indistinguishable from a healthy
+// connection at every level above the bytes.
+describe('startEventStream liveness', () => {
+  const fetchMock = vi.mocked(apiFetch);
+  const HEARTBEAT_INTERVAL_MS = 15_000;
+  const QUIET_TIMEOUT_MS = 2 * HEARTBEAT_INTERVAL_MS;
+
+  const HEARTBEAT = 'event: heartbeat\ndata: \n\n';
+  const NOTIFICATION =
+    'event: workout.created\n' +
+    'data: {"type":"workout.created","event_id":"e1","user_id":"u1",' +
+    '"workout_id":"w1","performed_at":"2026-09-07T00:00:00.000Z",' +
+    '"occurred_at":"2026-09-07T00:00:00.000Z"}\n\n';
+
+  interface Served {
+    send: (text: string) => void;
+    close: () => void;
+  }
+
+  let served: Served[];
+  let statuses: ChannelStatus[];
+  let notifications: unknown[];
+
+  /** The connection the stream is currently reading. */
+  function current(): Served {
+    return served[served.length - 1];
+  }
+
+  /** Let enqueued bytes reach the reader without moving the clock. */
+  async function settle(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  /** Advance to just past the point where a silent connection is given up on. */
+  async function goQuiet(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(QUIET_TIMEOUT_MS + 1);
+  }
+
+  function start(): () => void {
+    return startEventStream({
+      onNotification: (n) => notifications.push(n),
+      onStatus: (s) => statuses.push(s),
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    served = [];
+    statuses = [];
+    notifications = [];
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal(
+      'document',
+      Object.assign(new EventTarget(), { visibilityState: 'visible' as const }),
+    );
+
+    fetchMock.mockReset();
+    fetchMock.mockImplementation((_path, init) => {
+      const encoder = new TextEncoder();
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      let open = true;
+      const body = new ReadableStream<Uint8Array>({
+        start: (c) => {
+          controller = c;
+        },
+      });
+
+      // A real fetch errors the body when its signal aborts. Without this the
+      // watchdog would abort a connection and then wait forever on a reader
+      // that is still perfectly happy — the suite would hang rather than fail,
+      // which is the worst way for a test to be wrong.
+      init?.signal?.addEventListener('abort', () => {
+        if (!open) return;
+        open = false;
+        controller.error(new DOMException('aborted', 'AbortError'));
+      });
+
+      served.push({
+        send: (text) => open && controller.enqueue(encoder.encode(text)),
+        close: () => {
+          if (!open) return;
+          open = false;
+          controller.close();
+        },
+      });
+
+      return Promise.resolve({ ok: true, status: 200, body } as Response);
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('does not call itself live just because a socket opened', async () => {
+    const stop = start();
+    await settle();
+
+    // research #9: an intermediary can cut a stream and leave a socket that
+    // looks open and never delivers again. Trusting the socket is exactly how
+    // a screen ends up presenting stale data as live (FR-025).
+    expect(statuses).toEqual(['connecting']);
+
+    stop();
+  });
+
+  it('does not count the blank line our server opens with as a heartbeat', async () => {
+    // Nest writes a leading newline before it has anything to say. It is real
+    // traffic — it proves a socket — but it is not the evidence `live` claims.
+    const stop = start();
+    await settle();
+    current().send('\n');
+    await settle();
+
+    expect(statuses).toEqual(['connecting']);
+
+    stop();
+  });
+
+  it('goes live when the first heartbeat arrives', async () => {
+    const stop = start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    current().send(HEARTBEAT);
+    await settle();
+
+    expect(statuses).toEqual(['connecting', 'live']);
+
+    stop();
+  });
+
+  it('stays live, and says so once, while heartbeats keep arriving', async () => {
+    const stop = start();
+    await settle();
+
+    for (let beat = 0; beat < 10; beat++) {
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+      current().send(HEARTBEAT);
+      await settle();
+    }
+
+    // Two and a half minutes on one connection: the watchdog must be reset by
+    // each beat, not merely started once. And `onStatus` is deduplicated, so a
+    // consumer can render it without guarding against a beat-rate re-render.
+    expect(statuses).toEqual(['connecting', 'live']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    stop();
+  });
+
+  it('tolerates a single late beat', async () => {
+    const stop = start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    current().send(HEARTBEAT);
+    await settle();
+
+    // One beat missed entirely and the next arriving a second before the
+    // deadline. Two intervals exists to absorb exactly this; one interval
+    // would tear down a working channel over a late packet.
+    await vi.advanceTimersByTimeAsync(QUIET_TIMEOUT_MS - 1000);
+    current().send(HEARTBEAT);
+    await settle();
+
+    expect(statuses).toEqual(['connecting', 'live']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    stop();
+  });
+
+  it('counts a notification as traffic too', async () => {
+    const stop = start();
+    await settle();
+
+    // A busy channel may deliver notifications and no idle heartbeat at all.
+    // Liveness is about traffic, not about one frame type.
+    for (let sent = 0; sent < 4; sent++) {
+      await vi.advanceTimersByTimeAsync(QUIET_TIMEOUT_MS - 1000);
+      current().send(NOTIFICATION);
+      await settle();
+    }
+
+    expect(statuses).toEqual(['connecting', 'live']);
+    expect(notifications).toHaveLength(4);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    stop();
+  });
+
+  it('drops a socket that goes quiet, and reconnects', async () => {
+    const stop = start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    current().send(HEARTBEAT);
+    await settle();
+    expect(statuses).toEqual(['connecting', 'live']);
+
+    // Nothing closes, nothing errors — the connection simply stops delivering.
+    // This is the failure SC-008 is about: a screen idle for half an hour must
+    // still get the next change, and a zombie socket silently guarantees it
+    // never will.
+    await goQuiet();
+
+    expect(statuses).toEqual(['connecting', 'live', 'offline', 'connecting']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    stop();
+  });
+
+  it('drops a socket that never says anything at all', async () => {
+    // No heartbeat ever, not even the opening newline: the clock has to start
+    // at the response rather than at the first chunk, or this hangs forever.
+    const stop = start();
+    await settle();
+    await goQuiet();
+
+    expect(statuses).toEqual(['connecting', 'offline', 'connecting']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    stop();
+  });
+
+  it('comes back to live on the connection the watchdog opened', async () => {
+    const stop = start();
+    await settle();
+    await goQuiet();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    current().send(HEARTBEAT);
+    await settle();
+
+    // The watchdog aborts a connection, which reaches `run` as an AbortError —
+    // the same error the caller's own stop produces. Keying the loop's exit on
+    // the error rather than on `stopped` would end the stream here, silently
+    // and permanently, the first time a channel went quiet.
+    expect(statuses).toEqual(['connecting', 'offline', 'connecting', 'live']);
+    expect(notifications).toHaveLength(0);
+
+    stop();
+  });
+
+  it('reconnects immediately after a long healthy connection goes quiet', async () => {
+    const stop = start();
+    await settle();
+    for (let beat = 0; beat < 4; beat++) {
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+      current().send(HEARTBEAT);
+      await settle();
+    }
+    const droppedAt = Date.now() + QUIET_TIMEOUT_MS;
+
+    await goQuiet();
+
+    // A connection that worked for a minute earned a reset of the backoff, so
+    // the replacement opens at once rather than paying a penalty the outage
+    // never incurred.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(Date.now() - droppedAt).toBeLessThan(100);
+
+    stop();
+  });
+
+  it('stops watching once the caller stops it', async () => {
+    const stop = start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    current().send(HEARTBEAT);
+    await settle();
+
+    stop();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    // A live connection torn down by the caller must not leave a watchdog
+    // behind that fires minutes later and opens a connection nobody wants.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(statuses).toEqual(['connecting', 'live']);
+  });
+
+  it('treats a server closing the stream as a reconnect, not a quiet socket', async () => {
+    const stop = start();
+    await settle();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+    current().send(HEARTBEAT);
+    await settle();
+
+    // The routine case: the access token expired and the server closed. It is
+    // a clean close, so nothing should report `offline` on the way through.
+    current().close();
+    await settle();
+
+    expect(statuses).toEqual(['connecting', 'live', 'connecting']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    stop();
   });
 });

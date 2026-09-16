@@ -171,6 +171,37 @@ export function applyJitter(delay: number, random: () => number = Math.random): 
 const HEARTBEAT_EVENT = 'heartbeat';
 
 /**
+ * Must match `interval(15_000)` in `apps/api/src/events/events.controller.ts`.
+ *
+ * Not imported from there, and deliberately not shared: the server's interval
+ * is set by CloudFront's 30s `origin_read_timeout` default (research #9), while
+ * this is the client's tolerance for silence. They agree today for a reason,
+ * but they answer to different constraints and a shared constant would hide
+ * that the day one of them has to move.
+ */
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+/**
+ * How long a connection may go quiet before it is declared dead.
+ *
+ * Two intervals, per contracts/api.md — which is exactly one missed beat of
+ * slack, since the clock restarts on every frame. One interval would kill a
+ * healthy stream over a single late packet; three would leave a screen showing
+ * stale data as live for three quarters of a minute.
+ */
+const LIVENESS_TIMEOUT_MS = 2 * HEARTBEAT_INTERVAL_MS;
+
+/**
+ * What a screen may say about the channel, per data-model.md "Channel status".
+ *
+ * `live` is derived from the heartbeat, never from the socket: a stream cut by
+ * an intermediary leaves a socket that looks open and will never deliver again
+ * (research #9), and a screen trusting that is precisely the stale-data-as-live
+ * case FR-025 forbids.
+ */
+export type ChannelStatus = 'connecting' | 'live' | 'offline';
+
+/**
  * How long a connection must last to count as healthy and clear the backoff.
  *
  * A third of the heartbeat interval: anything shorter never saw a single
@@ -209,15 +240,18 @@ export interface EventStreamHandlers {
    */
   onHeartbeat?: () => void;
   /**
-   * Called once when reconnection is abandoned after `GIVE_UP_AFTER_MS`, and
-   * again on every later give-up if the stream was resumed in between.
+   * Called on every change of channel status, and never twice with the same
+   * value — a consumer can render it directly without deduplicating.
    *
-   * Not an error channel — nothing has gone wrong that the caller can fix, and
-   * FR-026 is explicit that losing the channel is not a failure state. It is
-   * the seam T044 needs to hold the store at `offline` so screens stop implying
-   * their data is live (FR-025).
+   * Not an error channel: `offline` is a fact about delivery, not a failure,
+   * and FR-026 is explicit that losing the channel must not read as one. This
+   * is the whole of what a screen needs to satisfy FR-025, which is why the
+   * three values are produced here rather than reassembled by the store —
+   * only this module sees all three inputs at once (whether a socket is open,
+   * whether the heartbeat is arriving, and whether retrying has been
+   * abandoned), and any two of them are not enough to name the state.
    */
-  onGiveUp?: () => void;
+  onStatus?: (status: ChannelStatus) => void;
 }
 
 /** Resolves after `ms`, or as soon as `signal` aborts — a pending backoff must not delay a stop. */
@@ -262,10 +296,12 @@ function isAbortError(err: unknown): boolean {
  * a tight loop.
  *
  * Retrying is bounded: after thirty minutes in which nothing connected the loop
- * stops and `onGiveUp` fires, and `online` or the tab becoming visible starts it
- * again. Nothing here throws or blocks at any point in that — every screen keeps
- * working off its own fetches whether this channel is up, down, or abandoned
- * (FR-026).
+ * stops, and `online` or the tab becoming visible starts it again. Nothing here
+ * throws or blocks at any point in that — every screen keeps working off its own
+ * fetches whether this channel is up, down, or abandoned (FR-026).
+ *
+ * Throughout, `onStatus` reports which of the three it is, with `live` earned by
+ * an arriving heartbeat rather than by an open socket.
  *
  * Call order, since this spans three functions that never call each other
  * directly: `start` → `run` (loop: `sleep` → `connectAndRead` → `dispatch` per
@@ -280,6 +316,14 @@ export function startEventStream(handlers: EventStreamHandlers): () => void {
   /** When the current run of failures began, or null while the channel is healthy. */
   let failingSince: number | null = null;
   let gaveUp = false;
+  /** Last value handed to `onStatus`; null until the first one is sent. */
+  let status: ChannelStatus | null = null;
+
+  function setStatus(next: ChannelStatus): void {
+    if (status === next) return;
+    status = next;
+    handlers.onStatus?.(next);
+  }
 
   function dispatch(frame: SseFrame): void {
     if (frame.event === HEARTBEAT_EVENT) {
@@ -309,42 +353,102 @@ export function startEventStream(handlers: EventStreamHandlers): () => void {
 
   /** Opens one connection and reads it to completion. Returns on a clean close. */
   async function connectAndRead(): Promise<void> {
-    const response = await apiFetch('/events', {
-      headers: { accept: 'text/event-stream' },
-      signal,
-    });
+    // This connection gets its own controller, chained to the stream's. Two
+    // things must be able to drop it and only one of them ends the stream: the
+    // caller's stop (via `signal`), and the quiet watchdog below, which drops
+    // *this* connection precisely so the loop can open another.
+    const connection = new AbortController();
+    const abortConnection = (): void => connection.abort();
+    signal.addEventListener('abort', abortConnection, { once: true });
 
-    // apiFetch resolves for any status — only apiJson throws — so without this
-    // a 429 (per-user cap) or 503 (backend unavailable) would be read as if it
-    // were an event stream, yield no frames, and end in silence. The server
-    // distinguishes those two deliberately; discarding that here would waste it.
-    if (!response.ok || !response.body) {
-      throw new ApiError(response.status, await response.text().catch(() => undefined));
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Restart the quiet timer.
+     *
+     * Petted by *bytes*, not by frames. Our own server opens with a blank line
+     * before it has anything to say, and a notification split across two reads
+     * arrives as two chunks of which only the second parses — both are the
+     * socket demonstrably working, and FR-025's rule is about traffic.
+     *
+     * `live` is a stricter claim and is set on a parsed frame instead: the
+     * opening blank line proves a socket exists, which is exactly the evidence
+     * research #9 says not to trust.
+     */
+    function noteTraffic(): void {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        // Nothing has "failed" here in any way the socket can report — which is
+        // the entire point. An intermediary cut the stream and left us holding
+        // an open connection that will never deliver again, so the only way
+        // back is to drop it ourselves and let `run` open a fresh one.
+        console.warn('[events] no traffic for two heartbeat intervals; reconnecting');
+        setStatus('offline');
+        connection.abort();
+      }, LIVENESS_TIMEOUT_MS);
     }
 
-    // pipeThrough(TextDecoderStream) rather than a hand-held TextDecoder: UTF-8
-    // is variable-length, so a chunk boundary can land mid-character and split
-    // a Cyrillic exercise name into two replacement chars. The transform keeps
-    // the partial bytes internally, which makes forgetting `{ stream: true }`
-    // structurally impossible.
-    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-    let buffer = '';
+    try {
+      const response = await apiFetch('/events', {
+        headers: { accept: 'text/event-stream' },
+        signal: connection.signal,
+      });
 
-    for (;;) {
-      // infinity loop
-      const { value, done } = await reader.read();
-      if (done) return; // server closed the stream — expected at token expiry
-      if (stopped) return;
+      // apiFetch resolves for any status — only apiJson throws — so without
+      // this a 429 (per-user cap) or 503 (backend unavailable) would be read as
+      // if it were an event stream, yield no frames, and end in silence. The
+      // server distinguishes those two deliberately; discarding that here would
+      // waste it.
+      if (!response.ok || !response.body) {
+        throw new ApiError(response.status, await response.text().catch(() => undefined));
+      }
 
-      const { frames, rest } = parseFrames(buffer, value);
-      buffer = rest;
+      // The clock starts at the response, not at the first chunk: a server that
+      // completes the handshake and then says nothing at all is the case with
+      // no other symptom, and starting the timer later would never catch it.
+      noteTraffic();
 
-      for (const frame of frames) dispatch(frame);
+      // pipeThrough(TextDecoderStream) rather than a hand-held TextDecoder:
+      // UTF-8 is variable-length, so a chunk boundary can land mid-character
+      // and split a Cyrillic exercise name into two replacement chars. The
+      // transform keeps the partial bytes internally, which makes forgetting
+      // `{ stream: true }` structurally impossible.
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = '';
+
+      for (;;) {
+        // infinity loop
+        const { value, done } = await reader.read();
+        if (done) return; // server closed the stream — expected at token expiry
+        if (stopped) return;
+
+        noteTraffic();
+
+        const { frames, rest } = parseFrames(buffer, value);
+        buffer = rest;
+
+        for (const frame of frames) {
+          // Before dispatching, not after: a consumer that refetches on a
+          // notification should already be able to see the channel is live.
+          setStatus('live');
+          dispatch(frame);
+        }
+      }
+    } finally {
+      clearTimeout(watchdog);
+      signal.removeEventListener('abort', abortConnection);
     }
   }
 
   async function run(): Promise<void> {
     while (!stopped && !gaveUp) {
+      // `attempt` is 0 both on the very first try and on the reconnect after a
+      // healthy connection ended, which is exactly data-model.md's `connecting`
+      // — "first attempt, or reconnecting after a drop". From the first failure
+      // onward the optimism is unearned: nothing is arriving and the screen has
+      // to be able to say so (FR-025).
+      setStatus(attempt === 0 ? 'connecting' : 'offline');
+
       await sleep(applyJitter(backoffDelay(attempt)), signal);
       if (stopped) return;
 
@@ -361,10 +465,15 @@ export function startEventStream(handlers: EventStreamHandlers): () => void {
       try {
         await connectAndRead();
       } catch (err) {
-        // Our own stop, not a failure. Nothing to log, nothing to retry.
-        if (stopped || isAbortError(err)) return;
+        // `stopped`, not `isAbortError`, is what ends the loop. Both the
+        // caller's stop and the quiet watchdog abort this connection, and only
+        // the first of them means the stream is over — keying on the error
+        // would let a watchdog reconnect silently kill the stream instead.
+        if (stopped) return;
 
-        console.warn('[events] stream failed', err);
+        // The watchdog logs its own reason before aborting, so there is nothing
+        // to add here beyond what it already said.
+        if (!isAbortError(err)) console.warn('[events] stream failed', err);
       }
 
       // How long the connection *lasted* decides whether it counted, not
@@ -409,7 +518,7 @@ export function startEventStream(handlers: EventStreamHandlers): () => void {
   function giveUp(): void {
     gaveUp = true;
     console.warn('[events] reconnects abandoned after 30m; resuming if the network or tab returns');
-    handlers.onGiveUp?.();
+    setStatus('offline');
     resumeListeners('add');
   }
 
