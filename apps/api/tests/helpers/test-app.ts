@@ -16,6 +16,8 @@ import {
 } from '@workout-logging/shared';
 
 import { AllExceptionsFilter } from '../../src/common/all-exceptions.filter';
+import { OutboxReconciliationService } from '../../src/events/outbox-reconciliation.service';
+import { OutboxRelayService } from '../../src/events/outbox-relay.service';
 
 // Shared harness for contract/integration tests: boots a real Nest+Fastify app
 // wired the same way apps/api/src/main.ts does (ValidationPipe, exception filter),
@@ -44,6 +46,38 @@ export async function createTestApp(
   app.useGlobalFilters(new AllExceptionsFilter());
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
+
+  // Stop the outbox relay in every test app.
+  //
+  // Any spec importing EventsModule (directly, or via WorkoutsModule) starts a
+  // relay loop that sweeps the shared `outbox` table once a second and
+  // publishes whatever it finds — including rows another spec file inserted and
+  // is about to assert on. Vitest runs spec files in parallel, so that turned
+  // into a genuine cross-file flake: the relay suite failed roughly one full
+  // run in three, and never when run alone.
+  //
+  // Stopping it here rather than in each spec is deliberate — the next contract
+  // test that happens to import EventsModule would otherwise reintroduce the
+  // flake silently. No contract test asserts on relay behaviour; the one suite
+  // that does drives `sweepOnce()` by hand.
+  // try/catch, not `{ optional: true }`: that flag governs *injection*, not
+  // `app.get`, which throws for a provider the graph does not contain — and
+  // most specs here import neither EventsModule nor WorkoutsModule.
+  try {
+    await app.get(OutboxRelayService, { strict: false }).onModuleDestroy();
+  } catch {
+    // No relay in this module graph; nothing to stop.
+  }
+
+  // Same reasoning for the reconciliation sweep: it rewrites `published_at` on
+  // rows belonging to any pending workout, which is exactly the column other
+  // specs assert on.
+  try {
+    await app.get(OutboxReconciliationService, { strict: false }).onModuleDestroy();
+  } catch {
+    // Not in this module graph.
+  }
+
   return app;
 }
 

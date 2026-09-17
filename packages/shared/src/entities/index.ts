@@ -5,3 +5,4 @@ export * from './exercise.entity';
 export * from './workout-exercise.entity';
 export * from './set.entity';
 export * from './processed-event.entity';
+export * from './outbox.entity';

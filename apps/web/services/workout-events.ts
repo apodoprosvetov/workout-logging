@@ -7,6 +7,7 @@ import { isoWeekKey } from '@lib/weeks';
 import { loadTokens, subscribeToSession } from './api-client';
 import { startEventStream } from './event-stream';
 
+import type { ChannelStatus } from './event-stream';
 import type {
   ChangeNotification,
   NotificationType,
@@ -84,8 +85,10 @@ export interface WorkoutLogSnapshot {
   readonly origin: 'local' | 'own-workout' | 'remote';
 
   /**
-   * Which kind of notification this was, or null for a local change — local
-   * changes are not notifications and have no type to report.
+   * Which kind of notification this was, or null when there was no
+   * notification: a local change, or a reconnect after a gap (FR-023) — the
+   * first is this tab's own doing and the second is an admission that
+   * something may have been missed, and neither has a type to report.
    *
    * Consumers use it to drop what cannot concern them (FR-019): the in-flight
    * surface ignores `analytics.updated`, since recomputed volume cannot change
@@ -160,6 +163,105 @@ const loggedInThisTab = new Set<string>();
 
 let snapshot: WorkoutLogSnapshot = INITIAL;
 const listeners = new Set<() => void>();
+
+// ---------------------------------------------------------------------------
+// Channel status
+//
+// A second store beside the one above, sharing this module but deliberately
+// not its snapshot. Putting `status` on WorkoutLogSnapshot would have been one
+// fewer moving part, and it is wrong for a reason that is not stylistic: every
+// publish increments `revision`, and consumers refetch on `revision`. A channel
+// that reconnects on a 15-minute token expiry changes status at least four
+// times an hour, so folding the two together would refetch every mounted list
+// on a transition that means nothing changed. Two stores, two subscriber sets,
+// no shared revision.
+//
+// The one place the two stores touch is the reconnect bump below, and it is
+// deliberately narrow: a *gap* in delivery bumps `revision`, an ordinary status
+// transition does not. "The channel changed state" and "the outage may have
+// hidden a change" are different claims, and only the second is worth a refetch.
+// ---------------------------------------------------------------------------
+
+// `connecting`, not `offline`, as the starting value. Nothing has failed before
+// the first attempt, and `offline` on a fresh page load would tell every user
+// their data is not live at the exact moment it was fetched.
+const INITIAL_STATUS: ChannelStatus = 'connecting';
+
+let channelStatus: ChannelStatus = INITIAL_STATUS;
+const statusListeners = new Set<() => void>();
+
+/**
+ * Whether delivery has been interrupted since the last healthy connection.
+ *
+ * Armed the moment the channel stops delivering, read when it starts again —
+ * which is what makes the bump below fire on a *recovery* rather than on any
+ * arrival at `live`. Without it the first connection of every page load would
+ * count as a reconnect and refetch everything a second time, moments after the
+ * mount fetches that already put the data on screen.
+ */
+let sawGap = false;
+
+function setChannelStatus(next: ChannelStatus): void {
+  if (channelStatus === next) return;
+
+  // Armed *before* the overwrite, because both halves of the test read the
+  // outgoing value. Two ways to lose delivery and they are not the same event:
+  // `offline` is the failure path, while `live` → `connecting` is the routine
+  // one — a 15-minute access token expires, the server closes the stream, and
+  // the client reopens it several times an hour. Notifications published in
+  // that window are dropped, because Redis pub/sub keeps nothing for a
+  // listener that is not there (FR-027). A short gap is still a gap.
+  if (next === 'offline' || channelStatus === 'live') sawGap = true;
+
+  channelStatus = next;
+  for (const listener of [...statusListeners]) listener();
+
+  // After the status listeners, not before: a consumer about to refetch should
+  // already be able to see the channel is live, rather than refetching under a
+  // label that still says updates are paused.
+  if (next === 'live' && sawGap) {
+    sawGap = false;
+    publishReconnect();
+  }
+}
+
+export function getChannelStatus(): ChannelStatus {
+  return channelStatus;
+}
+
+/**
+ * Prerender value, and the reason this store has one at all.
+ *
+ * apps/web is a static export: these pages are built on a machine with no
+ * session and no stream. Returning the client's initial value keeps hydration
+ * from observing a transition that never happened.
+ */
+function getServerChannelStatus(): ChannelStatus {
+  return INITIAL_STATUS;
+}
+
+/**
+ * Exported beside `getChannelStatus` for the same reason `subscribe` is: this
+ * pair is the store's contract, and exporting it is what lets the behaviour be
+ * tested without a DOM (plan.md, the Principle II decision).
+ */
+export function subscribeToChannelStatus(listener: () => void): () => void {
+  statusListeners.add(listener);
+  return () => statusListeners.delete(listener);
+}
+
+/**
+ * What a screen may say about the update channel (data-model.md, FR-025).
+ *
+ * Read-only and safe to call anywhere: subscribing to the status does **not**
+ * open the channel. Only `useWorkoutLog` does that, because only a consumer of
+ * the data has a reason to. A status indicator that opened a stream merely by
+ * rendering would hold a connection open on screens that display nothing it
+ * could update, against the per-user cap of FR-028.
+ */
+export function useChannelStatus(): ChannelStatus {
+  return useSyncExternalStore(subscribeToChannelStatus, getChannelStatus, getServerChannelStatus);
+}
 
 let stopStream: (() => void) | null = null;
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -293,6 +395,7 @@ function openChannel(): void {
 
   stopStream = startEventStream({
     onNotification: publishRemote,
+    onStatus: setChannelStatus,
   });
 }
 
@@ -303,6 +406,18 @@ function closeChannel(): void {
   closeTimer = setTimeout(() => {
     stopStream?.();
     stopStream = null;
+    // Back to the initial value rather than left at whatever it last was. A
+    // torn-down stream that stays `live` is the stale-as-live claim FR-025
+    // exists to prevent, and it is reachable: sign out on a dashboard with a
+    // healthy channel, and without this the status still reads `live` with no
+    // socket behind it. `connecting` is the honest reading of "closed, and the
+    // next thing that happens is an attempt".
+    setChannelStatus(INITIAL_STATUS);
+    // After the reset, because the line above arms it: leaving `live` looks
+    // like a gap, and a deliberate teardown is not one. Whatever mounts next
+    // fetches on mount, so bumping on the reopen would only duplicate that —
+    // which is the double-fetch this flag exists to avoid.
+    sawGap = false;
   }, 1000);
 }
 
@@ -335,6 +450,45 @@ export function publishWorkoutLogged(workoutId: string, performedAt: string): vo
     changeType: null,
     performedAt,
     isoWeek: isoWeekKey(new Date(performedAt)),
+    settledStatus: null,
+  });
+}
+
+/**
+ * Announce that delivery resumed after a gap (FR-023).
+ *
+ * Not a change in itself — it is the admission that one may have happened
+ * unobserved. Nothing here knows *what* was missed, and nothing can: Redis
+ * pub/sub keeps nothing for a listener that is not there (FR-027), so there is
+ * no backlog to replay. Asking every mounted consumer to re-read what it
+ * displays is the whole recovery mechanism, and it is enough precisely because
+ * notifications carry no data — the refetch is the source of truth either way.
+ *
+ * Every field is chosen so the bump reaches all four consumers and moves none
+ * of them anywhere, which is not automatic — each gate would have dropped it:
+ *
+ * - `changeType: null` rather than a notification type, because the in-flight
+ *   surface, the history list and the weekly list all skip
+ *   `analytics.updated`, and any *other* type would be a lie about what
+ *   arrived. Null is the only value that passes all three honestly.
+ * - `isoWeek` and `performedAt` null, which the week-scoped panels read as
+ *   "may concern any week" and refetch on. Naming a week would exempt every
+ *   other one — and the missed change could have landed in any of them.
+ * - `origin: 'remote'` because the dashboard's one permitted navigation turns
+ *   on `own-workout` (FR-018). A gap must refresh the week on screen, never
+ *   move it: the user did not act, and a screen that jumps on reconnect would
+ *   be the most startling thing in the app.
+ *
+ * `remote` with a null `changeType` is a combination no notification produces,
+ * and that is the point — this is the one publisher that has no notification
+ * behind it.
+ */
+function publishReconnect(): void {
+  publish({
+    origin: 'remote',
+    changeType: null,
+    performedAt: null,
+    isoWeek: null,
     settledStatus: null,
   });
 }

@@ -7,7 +7,7 @@ import {
   Sse,
   UseGuards,
 } from '@nestjs/common';
-import { finalize, interval, merge, map, timer, Observable, takeUntil } from 'rxjs';
+import { finalize, interval, merge, map, startWith, timer, Observable, takeUntil } from 'rxjs';
 
 import { NotificationsSubscriber } from './notifications.subscriber';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -26,7 +26,20 @@ export class EventsController {
         // here vs. 503 for a subscribe failure (see openStream's doc comment).
         throw new HttpException('Too many connections for this user', HttpStatus.TOO_MANY_REQUESTS);
       }
-      const heartbeat$ = interval(15_000).pipe(map(() => ({ type: 'heartbeat', data: '' })));
+      // `startWith` matters more than it looks. `interval` emits its first value
+      // *after* the period, so without it a freshly opened stream sends nothing
+      // for 15 seconds — and the client earns `live` from a parsed frame, not
+      // from an open socket (research #9). That put the client's reconnect
+      // refetch at ~15s against SC-007's 10-second budget, which it cannot
+      // meet. One frame at t=0 closes the gap and costs a few bytes per
+      // connection.
+      //
+      // Still "every 15 seconds while otherwise idle" per contracts/api.md:
+      // this adds a frame at connect, it does not change the period.
+      const heartbeat$ = interval(15_000).pipe(
+        startWith(0),
+        map(() => ({ type: 'heartbeat', data: '' })),
+      );
 
       return merge(stream, heartbeat$).pipe(
         takeUntil(timer(req.timeLeftInSeconds * 1000)),

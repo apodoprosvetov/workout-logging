@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EventStreamHandlers } from './event-stream';
 
@@ -21,8 +21,14 @@ vi.mock('./event-stream', () => ({
   },
 }));
 
-const { getSnapshot, publishWorkoutDeleted, publishWorkoutLogged, subscribe } =
-  await import('./workout-events');
+const {
+  getChannelStatus,
+  getSnapshot,
+  publishWorkoutDeleted,
+  publishWorkoutLogged,
+  subscribe,
+  subscribeToChannelStatus,
+} = await import('./workout-events');
 
 /** Opens the channel the way a mounting consumer does, and returns the unsubscribe. */
 function mountConsumer(): () => void {
@@ -72,6 +78,14 @@ describe('workout-events store', () => {
   beforeEach(() => {
     unsubscribe?.();
     unsubscribe = mountConsumer();
+  });
+
+  // Without this the last test's subscription outlives the block, and since the
+  // store is a module singleton its listener count never returns to zero — the
+  // channel stays open for every later suite in this file, which is exactly
+  // what the status tests below need to be able to close.
+  afterAll(() => {
+    unsubscribe?.();
   });
 
   describe('convergence (FR-020)', () => {
@@ -366,5 +380,301 @@ describe('workout-events store', () => {
       deliverRemote('2026-09-07T00:00:00.000Z', { workoutId: 'w-gone', status: 'failed' });
       expect(getSnapshot().origin).toBe('remote');
     });
+  });
+});
+
+// The status half of this module. Exercised through the captured handlers the
+// same way notifications are, so what is tested is the wiring the app actually
+// runs — `setChannelStatus` is private for the same reason `publishRemote` is.
+describe('channel status (FR-025, data-model.md)', () => {
+  /** Drives a status change the way the stream does. */
+  function deliverStatus(status: 'connecting' | 'live' | 'offline'): void {
+    captured.handlers?.onStatus?.(status);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  /** Tears the channel down and lets the 1s close debounce elapse. */
+  function closeChannelAndSettle(unsub: () => void): void {
+    unsub();
+    vi.advanceTimersByTime(1100);
+  }
+
+  it('starts at connecting, not offline', () => {
+    // Nothing has failed before the first attempt. Starting at `offline` would
+    // tell every user their data is not live at the moment it was fetched.
+    const unsub = mountConsumer();
+
+    expect(getChannelStatus()).toBe('connecting');
+
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('reports what the stream reports', () => {
+    const unsub = mountConsumer();
+
+    deliverStatus('live');
+    expect(getChannelStatus()).toBe('live');
+    deliverStatus('offline');
+    expect(getChannelStatus()).toBe('offline');
+
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('notifies status subscribers', () => {
+    const unsub = mountConsumer();
+    const seen: string[] = [];
+    const unsubStatus = subscribeToChannelStatus(() => seen.push(getChannelStatus()));
+
+    deliverStatus('live');
+    deliverStatus('offline');
+
+    expect(seen).toEqual(['live', 'offline']);
+
+    unsubStatus();
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('does not notify twice for the same status', () => {
+    const unsub = mountConsumer();
+    const listener = vi.fn();
+    const unsubStatus = subscribeToChannelStatus(listener);
+
+    deliverStatus('live');
+    deliverStatus('live');
+    deliverStatus('live');
+
+    // useSyncExternalStore re-renders every subscriber on each notification,
+    // so a channel repeating itself would re-render the whole tree for nothing.
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubStatus();
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('keeps the two stores separate — status alone refetches nothing', () => {
+    const unsub = mountConsumer();
+    const before = getSnapshot().revision;
+    const dataListener = vi.fn();
+    const unsubData = subscribe(dataListener);
+
+    // Reaching `live` for the first time is not a recovery: nothing was missed,
+    // and the consumers that just mounted already fetched. This is the whole
+    // reason status is a separate store — if every transition moved `revision`,
+    // a channel that reconnects several times an hour on token expiry would
+    // refetch every mounted list each time it did.
+    //
+    // The one transition that *does* bump is a recovery after a gap, which is
+    // a different claim and has its own block below (FR-023).
+    deliverStatus('live');
+
+    expect(getSnapshot().revision).toBe(before);
+    expect(dataListener).not.toHaveBeenCalled();
+
+    unsubData();
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('stops claiming live once the channel is torn down', () => {
+    // Reachable by signing out on a dashboard with a healthy channel: the
+    // socket goes away and, without the reset, the status still reads `live`
+    // with nothing behind it — the stale-as-live claim FR-025 forbids.
+    const unsub = mountConsumer();
+    deliverStatus('live');
+
+    closeChannelAndSettle(unsub);
+
+    expect(getChannelStatus()).toBe('connecting');
+    vi.useRealTimers();
+  });
+
+  it('keeps reporting live across a navigation', () => {
+    // React unmounts the old page's consumers before mounting the new page's,
+    // so the count dips to zero on every route change. The stream survives
+    // that by design, and the status has to survive it too — resetting on the
+    // dip would flash `connecting` on every navigation.
+    const unsub = mountConsumer();
+    deliverStatus('live');
+
+    unsub();
+    const unsubNext = mountConsumer();
+    vi.advanceTimersByTime(1100);
+
+    expect(getChannelStatus()).toBe('live');
+
+    closeChannelAndSettle(unsubNext);
+    vi.useRealTimers();
+  });
+
+  describe('reconnect bump (FR-023)', () => {
+    /** Revision delta across a status sequence, and whether it navigated. */
+    function bumpsOver(statuses: Array<'connecting' | 'live' | 'offline'>): number {
+      const before = getSnapshot().revision;
+      for (const s of statuses) deliverStatus(s);
+      return getSnapshot().revision - before;
+    }
+
+    it('does not bump on the first connection of a page load', () => {
+      const unsub = mountConsumer();
+
+      // Nothing was missed: the consumers that just mounted fetched on mount,
+      // and the data went on screen moments ago. Bumping here would refetch
+      // everything a second time on every single page load.
+      expect(bumpsOver(['live'])).toBe(0);
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('bumps when delivery resumes after an outage', () => {
+      const unsub = mountConsumer();
+      deliverStatus('live');
+
+      expect(bumpsOver(['offline', 'connecting', 'live'])).toBe(1);
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('bumps after a routine token-expiry reconnect', () => {
+      const unsub = mountConsumer();
+      deliverStatus('live');
+
+      // No `offline` in this path — the server closes a stream whose 15-minute
+      // access token expired and the client reopens it, several times an hour.
+      // Notifications published in that window are still dropped (FR-027), so
+      // a short gap is a gap.
+      expect(bumpsOver(['connecting', 'live'])).toBe(1);
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('bumps once per gap, not once per transition', () => {
+      const unsub = mountConsumer();
+      deliverStatus('live');
+
+      // A long outage flaps: the backoff retries, each attempt reports
+      // `connecting` and each failure `offline`. One recovery is one refetch.
+      expect(
+        bumpsOver([
+          'offline',
+          'connecting',
+          'offline',
+          'connecting',
+          'offline',
+          'connecting',
+          'live',
+        ]),
+      ).toBe(1);
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('does not bump while still offline', () => {
+      const unsub = mountConsumer();
+      deliverStatus('live');
+
+      // FR-023 is about what happens *after* the channel is re-established.
+      // Refetching mid-outage would just fail, repeatedly.
+      expect(bumpsOver(['offline', 'connecting', 'offline'])).toBe(0);
+
+      deliverStatus('connecting');
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('bumps on recovery even if the channel never connected at all', () => {
+      const unsub = mountConsumer();
+
+      // The API was down when the page loaded, so the mount fetches failed and
+      // the screens are showing errors rather than stale data. Reaching `live`
+      // for the first time is still a recovery, and the refetch is what clears
+      // them.
+      expect(bumpsOver(['offline', 'connecting', 'live'])).toBe(1);
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('does not bump on the reopen after a deliberate teardown', () => {
+      const unsub = mountConsumer();
+      deliverStatus('live');
+      closeChannelAndSettle(unsub);
+
+      // Navigating away long enough to close the channel, then back. The
+      // teardown passes through `connecting`, which looks exactly like the
+      // start of a gap — but whatever mounts next fetches on mount, so a bump
+      // here is the duplicate fetch the flag exists to prevent.
+      const unsubNext = mountConsumer();
+      expect(bumpsOver(['live'])).toBe(0);
+
+      closeChannelAndSettle(unsubNext);
+      vi.useRealTimers();
+    });
+
+    it('reaches every consumer and moves none of them', () => {
+      const unsub = mountConsumer();
+      deliverStatus('live');
+      deliverStatus('offline');
+      deliverStatus('connecting');
+      deliverStatus('live');
+
+      const snap = getSnapshot();
+      // Each of these is a gate some consumer would have dropped the bump on.
+      // `analytics.updated` is skipped by the in-flight surface, the history
+      // list and the weekly list; a non-null week exempts every other week;
+      // and `own-workout` is the one origin permitted to move the dashboard.
+      expect(snap.changeType).toBeNull();
+      expect(snap.isoWeek).toBeNull();
+      expect(snap.performedAt).toBeNull();
+      expect(snap.origin).toBe('remote');
+      expect(snap.settledStatus).toBeNull();
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+
+    it('does not claim a workout this tab logged', () => {
+      const unsub = mountConsumer();
+      publishWorkoutLogged('w-recon', '2026-09-14T00:00:00.000Z');
+      deliverStatus('live');
+      deliverStatus('offline');
+      deliverStatus('connecting');
+      deliverStatus('live');
+
+      // The id stays pending, so the settle that eventually arrives is still
+      // recognised as this tab's. A bump that consumed it would cost the one
+      // navigation FR-018 permits.
+      expect(getSnapshot().origin).toBe('remote');
+      deliverRemote('2026-09-14T00:00:00.000Z', { workoutId: 'w-recon' });
+      expect(getSnapshot().origin).toBe('own-workout');
+
+      closeChannelAndSettle(unsub);
+      vi.useRealTimers();
+    });
+  });
+
+  it('can be read without opening the channel', () => {
+    const startsBefore = captured.starts;
+
+    const unsubStatus = subscribeToChannelStatus(() => {});
+    expect(getChannelStatus()).toBe('connecting');
+
+    // A status indicator renders on screens that display nothing the channel
+    // could update. If subscribing opened a stream, those screens would each
+    // hold a connection against the per-user cap (FR-028).
+    expect(captured.starts).toBe(startsBefore);
+
+    unsubStatus();
+    vi.useRealTimers();
   });
 });

@@ -80,6 +80,34 @@ describe('GET /events — delivery and isolation (contract, per contracts/events
     );
   }
 
+  it('sends a heartbeat immediately, not one period later', async () => {
+    const stream = await connect(alice.token);
+
+    // `interval(15_000)` alone emits its first value *after* the period, so a
+    // fresh stream said nothing for 15 seconds. That is not merely untidy: the
+    // client earns `live` from a parsed frame rather than from an open socket
+    // (research #9), and it refetches on reconnect when it does — which put
+    // the post-outage refetch at ~15s against SC-007's 10-second budget.
+    //
+    // 2 seconds, not 15: the point is that the frame does not wait for the
+    // period, and a generous margin here still fails loudly if `startWith`
+    // goes away.
+    await stream.waitFor('event: heartbeat', 2000);
+  });
+
+  it('keeps the heartbeat period at 15s after the immediate one', async () => {
+    const stream = await connect(alice.token);
+    await stream.waitFor('event: heartbeat', 2000);
+
+    // Guards the other half of contracts/api.md's "every 15 seconds while
+    // otherwise idle": `startWith` adds a frame at connect, it must not turn
+    // the keep-alive into a faster loop. A second frame inside 3s would mean
+    // the period was changed rather than prefixed.
+    const after = await stream.settle(3000);
+
+    expect(after.match(/event: heartbeat/g)).toHaveLength(1);
+  });
+
   it('delivers a published notification to the owner as an SSE frame', async () => {
     const stream = await connect(alice.token);
     await publish(alice.id, 'evt-owner');
