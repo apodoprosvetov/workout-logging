@@ -115,7 +115,7 @@ export class IngestionService {
     // Note it can still move later — the parser overwrites it with a date
     // found in the text when performedAtExplicit is false
     // (apps/worker parser/handler.ts), which is the live-updates problem
-    // (specs/003 FR-013), not something this response can cover.
+    // (docs/specs-archive/003 FR-013), not something this response can cover.
     return { workoutId: workout.id, status: workout.status, performedAt: workout.performedAt };
   }
 

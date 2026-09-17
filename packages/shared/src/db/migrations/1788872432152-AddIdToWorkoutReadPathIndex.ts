@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 // GET /workouts now orders by performed_at DESC, id DESC — the id tie-break
-// makes the ordering total, which offset pagination requires (specs/003
+// makes the ordering total, which offset pagination requires (docs/specs-archive/003
 // research #2). This widens the read-path index to match.
 //
 // Ascending, no per-column direction. The ordering is uniformly descending, so

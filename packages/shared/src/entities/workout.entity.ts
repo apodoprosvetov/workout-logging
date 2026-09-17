@@ -26,7 +26,7 @@ export enum WorkoutStatus {
 
 // GET /workouts filters by userId and orders by performedAt DESC, id DESC —
 // the id tie-break makes the ordering total, which offset pagination requires
-// (specs/003 research #2). This composite index matches that access pattern
+// (docs/specs-archive/003 research #2). This composite index matches that access pattern
 // exactly.
 //
 // Ascending, with no per-column direction: TypeORM's @Index cannot express

@@ -126,7 +126,7 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
   it('returns the date it chose when performed_at was omitted', async () => {
     // The whole reason this field is in the response: the caller cannot know
     // the default otherwise, and a client that recomputed it would be
-    // duplicating server behaviour (specs/003, T017).
+    // duplicating server behaviour (docs/specs-archive/003, T017).
     const { accessToken } = await registerAndGetToken('default-date');
 
     const before = Date.now();

@@ -33,7 +33,7 @@ const WORKOUT_SETTLED = 'workout.settled' satisfies NotificationType;
 // the dashboard's weekly list and volume chart, and the full history on
 // /workouts. Those live in different subtrees with no common parent to hold
 // the state, and this project has no data-fetching library, so this module is
-// the seam between them (specs/003 research #1, contracts/ui-routes.md
+// the seam between them (docs/specs-archive/003 research #1, contracts/ui-routes.md
 // "Logged-workout signal").
 //
 // Same primitive and same reasoning as the token store behind

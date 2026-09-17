@@ -7,7 +7,7 @@ import { AppLogger } from '../log';
 // Redis as a *transport*, not as a datastore — which is why this sits in
 // events/ next to rabbitmq.ts rather than in db/redis.ts. The two share a
 // protocol and a URL and nothing else: db/redis.ts is the weekly-volume cache,
-// this is the notification fan-out (specs/004 research #2).
+// this is the notification fan-out (docs/specs-archive/004 research #2).
 //
 // Deliberately not folded into notifications.ts, even though the channel-name
 // helper lives there: that module is types plus one pure function, with no

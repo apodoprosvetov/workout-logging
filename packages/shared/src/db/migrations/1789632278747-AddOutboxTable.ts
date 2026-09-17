@@ -1,6 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-// The transactional outbox (specs/004 T057). A row lands here in the same
+// The transactional outbox (docs/specs-archive/004 T057). A row lands here in the same
 // Postgres transaction as the state it describes (T058); a relay publishes it
 // to RabbitMQ afterwards and stamps published_at (T059). See the OutboxEvent
 // entity for why each column is shaped the way it is.

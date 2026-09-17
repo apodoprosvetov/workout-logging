@@ -29,7 +29,7 @@ export class ApiError extends Error {
 // a change — so a sign-out in one tab left the other tab holding a token that
 // no longer existed, and a failed refresh cleared the session with no one
 // listening. Both are fixed here, by invalidating on the `storage` event and
-// notifying subscribers on every mutation (specs/003 T044, T045).
+// notifying subscribers on every mutation (docs/specs-archive/003 T044, T045).
 let tokensCache: StoredTokens | null = null;
 let hydrated = false;
 

@@ -92,7 +92,7 @@ export async function login(credentials: Credentials): Promise<AuthResult> {
  * No request: refresh tokens rotate on use and the server has no
  * revoke-on-logout endpoint, so signing out is purely local. Here rather than
  * inline in the header so there is one place to change when the token store
- * grows change notification (specs/003 T044).
+ * grows change notification (docs/specs-archive/003 T044).
  */
 export function logout(): void {
   clearTokens();

@@ -17,7 +17,7 @@ import type { WeeklyVolumeResponse } from '@lib/contracts/analytics';
  * lib/weeks.ts. Note this endpoint takes a week *key*, not the
  * `[after, before)` date window `GET /workouts` takes — the two describe the
  * same week through different parameters, and `packages/shared`'s `isoWeekKey`
- * remains the single definition of where a week begins (specs/003 research #9).
+ * remains the single definition of where a week begins (docs/specs-archive/003 research #9).
  *
  * Throws ApiError on any non-2xx; there is no "no such week" — a week with no
  * training returns an empty `volumes` array.

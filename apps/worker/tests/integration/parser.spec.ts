@@ -360,7 +360,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     it('announces a parsed workout with the date the parser extracted, not the one it was created with', async () => {
       // The whole point of carrying performed_at in the notification: a client
       // showing the creation week has to learn the workout moved (FR-004). This
-      // is the case specs/003 recorded as out of reach, deferred to FR-013.
+      // is the case docs/specs-archive/003 recorded as out of reach, deferred to FR-013.
       const createdWith = new Date('2020-01-15T00:00:00.000Z');
       // A catalogued exercise on purpose — an unmatched one settles as
       // needs_review, and this case is about the date, not the status.
