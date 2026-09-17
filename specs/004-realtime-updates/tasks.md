@@ -178,13 +178,13 @@ converges within ~10s. Quickstart scenario 4.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T047 [P] Record the two research findings as code comments citing their source, per Constitution Principle V: CloudFront's 30s default behind the 15s heartbeat in `apps/api/src/events/events.controller.ts`, and why fan-out avoids the RabbitMQ work exchange in `apps/api/src/events/notifications.subscriber.ts`
-- [ ] T048 [P] Add structured log lines for channel lifecycle and delivery — opened, closed, published, dropped, cap-refused — via the existing loggers, never `console.log` (FR-029)
-- [ ] T049 Run scenarios 1–4 from [quickstart.md](./quickstart.md) locally and fix what they surface
+- [X] T047 [P] Record the two research findings as code comments citing their source, per Constitution Principle V: CloudFront's 30s default behind the 15s heartbeat in `apps/api/src/events/events.controller.ts`, and why fan-out avoids the RabbitMQ work exchange in `apps/api/src/events/notifications.subscriber.ts`
+- [X] T048 [P] Add structured log lines for channel lifecycle and delivery — opened, closed, published, dropped, cap-refused — via the existing loggers, never `console.log` (FR-029)
+- [X] T049 Run scenarios 1–4 from [quickstart.md](./quickstart.md) locally and fix what they surface
 - [ ] T050 Run scenario 5 from [quickstart.md](./quickstart.md) against `infra/docker-compose.prod.yml` (two replicas behind Caddy) — the fan-out bug this catches cannot occur with a single API process
-- [ ] T051 Run scenario 6 from [quickstart.md](./quickstart.md) (cross-user isolation), asserting on the raw event stream rather than the rendered UI
-- [ ] T052 Verify SC-010 — measure `GET /api/health` latency (baseline), hold 200 concurrent `/api/events` connections open with a throwaway Node script, measure again, and confirm the degradation stays under 10%. Also confirm memory does not grow while connections merely idle, and that closing all 200 empties the connection registry (FR-027). Record the numbers in [quickstart.md](./quickstart.md) scenario 7; if the target is missed, that is a finding to raise, not a number to quietly adjust
-- [ ] T053 [P] `npm run lint && npm run format:check && npm test` from the root, with the dev worker stopped (its RabbitMQ race with the ingestion integration test is known, not a regression)
+- [X] T051 Run scenario 6 from [quickstart.md](./quickstart.md) (cross-user isolation), asserting on the raw event stream rather than the rendered UI
+- [X] T052 Verify SC-010 — measure `GET /api/health` latency (baseline), hold 200 concurrent `/api/events` connections open with a throwaway Node script, measure again, and confirm the degradation stays under 10%. Also confirm memory does not grow while connections merely idle, and that closing all 200 empties the connection registry (FR-027). Record the numbers in [quickstart.md](./quickstart.md) scenario 7; if the target is missed, that is a finding to raise, not a number to quietly adjust
+- [X] T053 [P] `npm run lint && npm run format:check && npm test` from the root, with the dev worker stopped (its RabbitMQ race with the ingestion integration test is known, not a regression)
 
 ---
 
