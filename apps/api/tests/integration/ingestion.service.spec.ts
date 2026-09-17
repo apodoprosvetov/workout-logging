@@ -19,6 +19,7 @@ import {
   WORKOUT_UPLOADED_ROUTING_KEY,
 } from '@workout-logging/shared';
 
+import { OutboxRelayService } from '../../src/events/outbox-relay.service';
 import { IngestionService } from '../../src/workouts/ingestion.service';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
 
@@ -44,6 +45,14 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
     // RabbitMqPublisherService opens its channel) only run after .init().
     await moduleRef.init();
     service = moduleRef.get(IngestionService);
+
+    // Stop the relay before any test runs. WorkoutsModule imports EventsModule,
+    // so T059's relay starts with this graph and would publish the very rows
+    // these tests assert are still waiting — a race the suite would lose
+    // occasionally rather than reliably, which is the worst kind. This suite is
+    // about what ingest writes; what the relay then does with it has its own
+    // spec.
+    await moduleRef.get(OutboxRelayService).onModuleDestroy();
 
     // workouts.user_id is a real FK to users.id — needs an actual row, not a placeholder string.
     const ds = await createTypeOrmDataSource().initialize();
@@ -129,9 +138,12 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
     expect(rows).toHaveLength(1);
     const [row] = rows;
     expect(row.routing_key).toBe(WORKOUT_UPLOADED_ROUTING_KEY);
-    // Null is the queue: the relay has not taken it yet (see OutboxEvent).
-    expect(row.published_at).toBeNull();
     expect(row.occurred_at).toBeInstanceOf(Date);
+    // Deliberately no assertion on `published_at`. It was here until T059, and
+    // it was a claim about the *relay* inside a test about ingest: now that a
+    // relay exists, whether a row has been picked up yet depends on another
+    // spec file's timing. That a fresh row starts unpublished and then gets
+    // published is outbox-relay.service.spec.ts's to prove.
 
     const payload = row.payload as {
       workout_id: string;
