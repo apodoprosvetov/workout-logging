@@ -7,6 +7,7 @@ import { SnakeNamingStrategy } from 'typeorm-naming-strategies';
 
 import {
   Exercise,
+  OutboxEvent,
   ProcessedEvent,
   RefreshToken,
   User,
@@ -24,7 +25,16 @@ export const typeOrmDataSourceOptions: DataSourceOptions = {
   type: 'postgres',
   url: process.env.DATABASE_URL,
   namingStrategy: new SnakeNamingStrategy(),
-  entities: [User, RefreshToken, Workout, WorkoutExercise, Exercise, WorkoutSet, ProcessedEvent],
+  entities: [
+    User,
+    RefreshToken,
+    Workout,
+    WorkoutExercise,
+    Exercise,
+    WorkoutSet,
+    ProcessedEvent,
+    OutboxEvent,
+  ],
   migrations: [path.join(__dirname, 'migrations', '*.{ts,js}')],
   synchronize: false,
 };
