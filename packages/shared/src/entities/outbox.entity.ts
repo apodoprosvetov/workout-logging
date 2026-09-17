@@ -51,9 +51,17 @@ export class OutboxEvent {
    * duplicate keys collapse — which is fine here because every consumer parses
    * it as JSON and none of them depend on byte-for-byte identity. If one ever
    * did (a signature over the raw body, say), this would have to become `text`.
+   *
+   * Typed `object`, not `Record<string, unknown>`. The envelope's real shape
+   * depends on `routingKey` and only its publisher knows it, so the index
+   * access the wider type advertises would be a guess at every call site —
+   * and nothing needs it: the relay serialises the row whole. It is also what
+   * TypeORM's `insert()` accepts; `QueryDeepPartialEntity` recurses into the
+   * `unknown` values of a Record and then rejects the very object it came
+   * from, which is a cast at every write to buy an access nobody makes.
    */
   @Column({ type: 'jsonb' })
-  payload!: Record<string, unknown>;
+  payload!: object;
 
   /**
    * When the event happened, as the envelope reports it.

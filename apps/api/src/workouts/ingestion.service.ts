@@ -14,6 +14,7 @@ import { Repository } from 'typeorm';
 import {
   deleteWorkoutImages,
   getWorkoutImagesBucket,
+  OutboxEvent,
   RawUploadDocument,
   uploadWorkoutImage,
   Workout,
@@ -26,7 +27,6 @@ import {
 } from '@workout-logging/shared';
 
 import { NotificationsPublisher } from '../events/notifications.publisher';
-import { RabbitMqPublisherService } from '../events/rabbitmq-publisher.service';
 
 export interface IngestInput {
   userId: string;
@@ -50,18 +50,24 @@ export interface IngestResult {
  *
  * ```
  * POST /workouts        -> ingest()
- *                          -> storeOrUndo()            [the rollback boundary]
- *                               uploadWorkoutImage()   (GridFS,     shared/db/gridfs.ts)
- *                               rawUploadModel.create()(Mongo)
- *                               workoutRepository.save()(Postgres)
- *                               publisher.publish()    (RabbitMQ,   events/rabbitmq-publisher.service.ts)
+ *                          -> storeOrUndo()             [the rollback boundary]
+ *                               uploadWorkoutImage()    (GridFS,   shared/db/gridfs.ts)
+ *                               rawUploadModel.create() (Mongo)
+ *                               manager.transaction():  (Postgres, one commit)
+ *                                   save(Workout)
+ *                                   insert(OutboxEvent)
  *                             on any failure -> undo() -> 503, nothing stored
- *                          -> notification.publish()   [outside the boundary]
+ *                          -> notification.publish()    [outside the boundary]
  * ```
+ *
+ * **Nothing here publishes to RabbitMQ.** Since T058 the request path only
+ * writes the event to the `outbox` table; the relay (T059) is what puts it on
+ * the exchange, and the parser is downstream of the relay, not of this method.
+ * A reader tracing why a workout never parsed should look there, not here.
  *
  * The ordering inside `storeOrUndo` is not arbitrary and must not be
  * rearranged: each step needs the id the previous one produced, and `undo`
- * walks the same list backwards.
+ * walks the Mongo half backwards.
  */
 @Injectable()
 export class IngestionService {
@@ -71,7 +77,6 @@ export class IngestionService {
     @InjectRepository(Workout) private readonly workoutRepository: Repository<Workout>,
     @InjectModel('RawUpload') private readonly rawUploadModel: Model<RawUploadDocument>,
     @InjectConnection() private readonly mongoConnection: Connection,
-    private readonly publisher: RabbitMqPublisherService,
     private readonly notification: NotificationsPublisher,
   ) {}
 
@@ -124,11 +129,15 @@ export class IngestionService {
    * where no single place holds the overall picture.
    *
    * What it buys: the caller sees either "it worked" or "it failed", never a
-   * half-written workout. The half that mattered for spec 004 is the last step
-   * — since T054 an unacknowledged publish raises instead of vanishing, and
-   * without this the row would already be saved when it does, leaving a
-   * `pending` workout no parser will ever pick up. That workout sits in the
-   * in-flight surface forever, which SC-012 forbids.
+   * half-written workout.
+   *
+   * The failure that originally motivated it — a publish that vanished, leaving
+   * a `pending` workout no parser would ever pick up, stuck in the in-flight
+   * surface forever against SC-012 — is gone from this path entirely as of
+   * T058, because the publish is. What is left for the compensation is the
+   * genuinely cross-database half: GridFS and `raw_uploads` are written before
+   * a Postgres transaction that can still fail, and no transaction spans both
+   * databases.
    */
   private async storeOrUndo(
     input: IngestInput,
@@ -140,7 +149,6 @@ export class IngestionService {
     // Everything created so far, in creation order. `undo` walks it backwards.
     const imageRefs: string[] = [];
     let rawUploadId: string | null = null;
-    let workoutId: string | null = null;
 
     try {
       // Transient storage (research.md #11): images live in GridFS only until
@@ -169,50 +177,95 @@ export class IngestionService {
         image_refs: imageRefs,
         ai_response_raw: null,
       });
-      rawUploadId = rawUpload._id.toString();
+      // Two names for one value, and both are needed: `rawUploadRef` is a
+      // `string` the compiler can see, while `rawUploadId` is the outer
+      // `string | null` the compensation reads if a later step throws.
+      const rawUploadRef = rawUpload._id.toString();
+      rawUploadId = rawUploadRef;
 
-      const workout = await this.workoutRepository.save(
-        this.workoutRepository.create({
-          userId: input.userId,
-          source: input.source,
-          hasText,
-          hasImage,
-          rawInputRef: rawUploadId,
-          status: WorkoutStatus.PENDING,
-          performedAt: input.performedAt ?? new Date(),
-          performedAtExplicit: !!input.performedAt,
-        }),
-      );
-      workoutId = workout.id;
+      // The workout row and its event, committed together or not at all.
+      //
+      // This is Constitution Principle IV — "an event that drives work MUST be
+      // published only after the state it describes has committed" — turned
+      // from something the code is careful about into something it cannot get
+      // wrong. Before this, the publish sat after the save with nothing binding
+      // the two; now there is no ordering to get wrong because there is no
+      // second step in the request path at all.
+      //
+      // `this.workoutRepository.manager`, not an injected DataSource: the
+      // repository's own manager is the same connection, and routing the
+      // transaction through it keeps the number of things this service has to
+      // be handed at construction unchanged.
+      const workout = await this.workoutRepository.manager.transaction(async (manager) => {
+        const saved = await manager.save(
+          manager.create(Workout, {
+            userId: input.userId,
+            source: input.source,
+            hasText,
+            hasImage,
+            rawInputRef: rawUploadRef,
+            status: WorkoutStatus.PENDING,
+            performedAt: input.performedAt ?? new Date(),
+            performedAtExplicit: !!input.performedAt,
+          }),
+        );
 
-      const event: WorkoutUploadedEvent = {
-        event_id: randomUUID(),
-        user_id: input.userId,
-        workout_id: workout.id,
-        raw_upload_ref: rawUploadId,
-        occurred_at: new Date().toISOString(),
-      };
-      await this.publisher.publish(WORKOUT_UPLOADED_ROUTING_KEY, event);
+        const occurredAt = new Date();
+        const event: WorkoutUploadedEvent = {
+          event_id: randomUUID(),
+          user_id: input.userId,
+          workout_id: saved.id,
+          raw_upload_ref: rawUploadRef,
+          occurred_at: occurredAt.toISOString(),
+        };
+
+        // `insert`, not `save`: the primary key is supplied rather than
+        // generated, so `save` would issue a SELECT first to decide between
+        // INSERT and UPDATE. This table is append-only and the id is a fresh
+        // uuid every time, so that round-trip buys nothing — and an UPDATE
+        // here would be a bug quietly papered over.
+        //
+        // `occurred_at` is written twice on purpose: once as a column the
+        // relay orders by, and once inside the payload, because the payload is
+        // the wire envelope consumers actually read and it must stay whole.
+        await manager.insert(OutboxEvent, {
+          eventId: event.event_id,
+          routingKey: WORKOUT_UPLOADED_ROUTING_KEY,
+          payload: event,
+          occurredAt,
+          publishedAt: null,
+        });
+
+        return saved;
+      });
 
       return workout;
     } catch (err) {
       this.logger.error(
-        `ingest failed, undoing what was written (workout=${workoutId ?? 'none'}, rawUpload=${rawUploadId ?? 'none'}, images=${imageRefs.length})`,
+        `ingest failed, undoing the Mongo writes (rawUpload=${rawUploadId ?? 'none'}, images=${imageRefs.length})`,
         err instanceof Error ? err.stack : undefined,
       );
 
-      await this.undo(bucket, imageRefs, rawUploadId, workoutId);
+      await this.undo(bucket, imageRefs, rawUploadId);
 
       // 503, not 500: nothing is wrong with the request, and retrying it is
       // exactly the right thing for the caller to do — which is only true
-      // because `undo` ran first. Before this method existed, a retry would
-      // have produced a duplicate workout.
+      // because nothing survives a failure. Before the compensation existed, a
+      // retry would have produced a duplicate workout.
       throw new ServiceUnavailableException('Could not store the workout. Nothing was saved.');
     }
   }
 
   /**
-   * Reverse the writes, newest first.
+   * Reverse the **Mongo** writes, newest first.
+   *
+   * Postgres is not its business any more, and that is T058's doing: the
+   * workout row and its outbox event now commit or roll back together, so a
+   * failure on that side leaves nothing behind for anyone to delete. What an
+   * outbox cannot help with is the other database — it spans one — so the
+   * GridFS blobs and the `raw_uploads` doc written before the transaction are
+   * still this method's job. That asymmetry is the whole reason a compensating
+   * action survives into increment 2.
    *
    * **Never throws.** A failed undo must not replace the original error with
    * its own: the caller needs to know the ingest failed, and that the retry is
@@ -222,31 +275,16 @@ export class IngestionService {
    * **The decision this records** (required by T056): if the compensation
    * itself fails — Mongo goes away between the write and the rollback — the
    * orphan is logged and accepted. Nothing retries it today. That is a real,
-   * chosen limit rather than an oversight: the orphan is a blob or a row that
+   * chosen limit rather than an oversight: the orphan is a blob or a doc that
    * nothing references and nothing serves, so it costs storage and no
    * correctness, and the alternative (a durable cleanup queue) is a second
-   * outbox to justify what is already the rarer half of a rare case. The
-   * `workouts` row is undone first precisely because it is the only one of the
-   * three a *user* can see; if the sequence is going to break partway, it
-   * should break on the invisible end.
+   * outbox to justify what is already the rarer half of a rare case.
    */
   private async undo(
     bucket: ReturnType<typeof getWorkoutImagesBucket>,
     imageRefs: string[],
     rawUploadId: string | null,
-    workoutId: string | null,
   ): Promise<void> {
-    if (workoutId) {
-      try {
-        await this.workoutRepository.delete(workoutId);
-      } catch (err) {
-        this.logger.error(
-          `orphaned workout row ${workoutId}: compensation failed`,
-          err instanceof Error ? err.stack : undefined,
-        );
-      }
-    }
-
     if (rawUploadId) {
       try {
         await this.rawUploadModel.deleteOne({ _id: rawUploadId });
