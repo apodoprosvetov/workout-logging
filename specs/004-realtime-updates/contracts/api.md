@@ -62,7 +62,7 @@ either. The blank line terminating each frame is required by the SSE format.
 
 **Heartbeat**
 
-A named event every 15 seconds while otherwise idle:
+A named event on connect, and every 15 seconds while otherwise idle:
 
 ```
 event: heartbeat
@@ -75,6 +75,13 @@ Non-negotiable: CloudFront sets no `origin_read_timeout`
 between packets and an idle stream is cut without this (research #9). The client
 also uses it as its liveness signal — no traffic for more than two intervals
 means the channel is not healthy regardless of what the socket reports (FR-025).
+
+*The frame on connect was added by T046*: `interval(15_000)` alone emits its
+first value only after the period, so a freshly opened stream said nothing for
+15 seconds. The client earns `live` from a parsed frame rather than from an open
+socket (research #9) and refetches on reconnect when it does (FR-023), which put
+the post-outage refetch at ~15s against SC-007's 10-second budget. `startWith`
+prefixes one frame at t=0; the period is unchanged.
 
 *A named event rather than the bare SSE comment (`: ping`) this contract
 originally specified*: Nest's `@Sse()` cannot emit a comment line — it

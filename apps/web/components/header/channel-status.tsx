@@ -11,14 +11,15 @@ import { useChannelStatus } from '@services/workout-events';
  * deliberately left unspecified there, so what follows is a choice, with its
  * reasoning:
  *
- * **Silent while `connecting`.** The server sends nothing until its first
- * heartbeat, so a freshly opened channel reads `connecting` for up to 15
- * seconds (T043) — on every page load. Rendering an indicator through that
- * would put a "connecting…" badge on the screen of every user every time they
- * navigate, for a channel that is almost always about to work. It is also not
- * a lie by omission: on first load the data on screen was *just fetched*, so
- * it is current whether or not a stream is open yet. FR-025 forbids presenting
- * stale data as live; it does not require announcing the connection.
+ * **Silent while `connecting`.** Since T046 the server sends a heartbeat the
+ * moment the stream opens, so this state is now brief rather than the 15
+ * seconds it was when this component was written — but staying silent is still
+ * right, and for the reason that outlasted the timing: on first load the data
+ * on screen was *just fetched*, so it is current whether or not a stream is
+ * open yet. FR-025 forbids presenting stale data as live; it does not require
+ * announcing the connection. A badge that appeared on every page load and
+ * every reconnect would be noise about a channel that is almost always about
+ * to work.
  *
  * **Visible while `offline`.** Here the omission would be a lie: the data on
  * screen may be minutes old and nothing is coming to correct it.
