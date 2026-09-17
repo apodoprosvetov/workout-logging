@@ -6,9 +6,11 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@workout-logging/shared": "*",
     "next": "16.3.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -21,6 +23,8 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^2.1.4"
   }
 }

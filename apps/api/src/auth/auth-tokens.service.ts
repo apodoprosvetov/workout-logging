@@ -10,8 +10,12 @@ import { RefreshToken } from '@workout-logging/shared';
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (research.md #6)
 
-export interface AccessTokenPayload {
+export interface AccessTokenClaims {
   sub: string;
+}
+export interface AccessTokenPayload extends AccessTokenClaims {
+  iat: number; // signed, unix seconds
+  exp: number; // expired in, unix seconds
 }
 
 export interface RotatedRefreshToken {
@@ -36,7 +40,7 @@ export class AuthTokensService {
   }
 
   issueAccessToken(userId: string): string {
-    const payload: AccessTokenPayload = { sub: userId };
+    const payload: AccessTokenClaims = { sub: userId };
     return this.jwtService.sign(payload);
   }
 

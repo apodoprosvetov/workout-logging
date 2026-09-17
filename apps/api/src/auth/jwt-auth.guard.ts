@@ -5,6 +5,7 @@ import { AuthTokensService } from './auth-tokens.service';
 
 export interface AuthenticatedRequest extends FastifyRequest {
   userId: string;
+  timeLeftInSeconds: number; // token experesIn, unix seconds
 }
 
 function extractBearerToken(header: string | undefined): string | null {
@@ -26,7 +27,10 @@ export class JwtAuthGuard implements CanActivate {
 
     try {
       const payload = this.authTokensService.verifyAccessToken(token);
+      const currentTimeInSeconds = Math.floor(Date.now() / 1000);
+
       request.userId = payload.sub;
+      request.timeLeftInSeconds = payload.exp - currentTimeInSeconds;
     } catch {
       throw new UnauthorizedException();
     }

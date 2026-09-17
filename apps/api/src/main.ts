@@ -47,6 +47,15 @@ async function bootstrap(): Promise<void> {
   app.useGlobalFilters(new AllExceptionsFilter());
   registerRequestLogging(app);
 
+  // Without this, Nest never runs onModuleDestroy in a real process — the hooks
+  // only fire on an explicit app.close(), which nothing calls here. Deploys
+  // restart api-1 then api-2 by SIGTERM (README, "Deploy"), so every rolling
+  // release would otherwise kill the process mid-flight: Redis and RabbitMQ
+  // connections dropped rather than closed, and open SSE streams severed
+  // instead of completing. Clients recover either way (FR-022), but a stream
+  // that ends cleanly costs the client one reconnect less.
+  app.enableShutdownHooks();
+
   const port = app.get(ConfigService).get<number>('PORT') ?? 3000;
   await app.listen(port, '0.0.0.0');
 }

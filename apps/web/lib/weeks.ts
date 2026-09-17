@@ -1,19 +1,26 @@
-// Mirrors contracts/api.md's GET /analytics/weekly-volume response shape.
-// apps/web only knows the HTTP contract (plan.md).
-export interface WeeklyVolume {
-  muscle_group: string;
-  volume: number;
-}
-
-export interface WeeklyVolumeResponse {
-  week: string;
-  volumes: WeeklyVolume[]; // API returns them sorted by volume desc
-}
+// ISO week arithmetic — the one place a week's boundaries are decided, so the
+// dashboard, the volume chart and the weekly workout list cannot disagree about
+// where a week starts. All UTC; rendering those boundaries for a reader is
+// lib/display/date-display.ts's job, and that file records why the two layers
+// must not both pick a timezone.
 
 // ISO 8601 week label (`YYYY-Www`) for a date, in UTC — mirrors
-// packages/shared's isoWeekKey. apps/web can't import @workout-logging/shared:
-// it's a CommonJS package whose barrel pulls in mongoose/pg/ioredis, none of
-// which belong in a browser bundle.
+// packages/shared's isoWeekKey, which apps/web cannot import: it is a CommonJS
+// package whose barrel pulls in mongoose/pg/ioredis, none of which belong in a
+// browser bundle.
+//
+// The rule is about *values*, not the package. `import type` is erased by the
+// compiler before anything resolves, so type-only imports from shared are fine
+// and are used — services/event-stream.ts takes the notification types that
+// way, and a production build was checked to contain no trace of ioredis,
+// mongoose, typeorm or dotenv. Importing a *function* like isoWeekKey would
+// emit a real require and drag all of that in, which is why this one is
+// duplicated here instead.
+//
+// One cost that comes with it: apps/web now type-checks against
+// packages/shared's emitted .d.ts, so `next build` needs dist/ to exist. Local
+// dev never notices (predev builds shared); .github/workflows/deploy.yml builds
+// it explicitly before the web build for that reason.
 export function isoWeekKey(date: Date): string {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7) + 3); // this week's Thursday
@@ -26,12 +33,6 @@ export function isoWeekKey(date: Date): string {
 // The ISO week `weeksAgo` weeks before the current one (0 = this week).
 export function weekKeyForOffset(weeksAgo: number): string {
   return isoWeekKey(new Date(Date.now() - weeksAgo * 7 * 86_400_000));
-}
-
-// `D Mon` (e.g. `10 Jun`) for a date, in UTC.
-export function formatDayMonth(date: Date): string {
-  // en-GB orders day before month ("10 Jun"); en-US would give "Jun 10".
-  return date.toLocaleString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 // Monday 00:00:00 UTC of the ISO week containing `date`. The one place week

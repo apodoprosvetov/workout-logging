@@ -7,7 +7,9 @@ import {
   connectRabbitMq,
   createMongooseConnection,
   createRedisClient,
+  createRedisSubscriber,
   createTypeOrmDataSource,
+  getEventsChannelName,
   downloadWorkoutImage,
   getWorkoutImagesBucket,
   retryTiersFor,
@@ -23,6 +25,7 @@ import {
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSE_QUEUE,
   WORKOUT_PARSED_ROUTING_KEY,
+  WORKOUT_SETTLED_KEY,
   WORKOUT_UPLOADED_ROUTING_KEY,
 } from '@workout-logging/shared';
 
@@ -30,6 +33,7 @@ import { registerParserConsumer } from '../../src/parser/handler.js';
 import { getRetryAttempt, handleParseFailure } from '../../src/parser/retry.js';
 
 import type { WorkerContext } from '../../src/index.js';
+import type { WorkoutSettledNotification } from '@workout-logging/shared';
 import type { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
 import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
@@ -63,6 +67,11 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
     let redis: Redis;
     let context: WorkerContext;
     let userId: string;
+    // Its own connection: ioredis refuses every other command once a client has
+    // subscribed, so the `redis` above (which the worker publishes through)
+    // cannot also listen.
+    let notificationSubscriber: Redis;
+    const notifications: WorkoutSettledNotification[] = [];
 
     beforeAll(async () => {
       // The matched-exercise assertions below depend on exercise_catalog being
@@ -101,6 +110,12 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
             .create({ email: `parser-integration-${Date.now()}@example.com`, passwordHash: 'x' }),
         );
       userId = user.id;
+
+      notificationSubscriber = createRedisSubscriber();
+      notificationSubscriber.on('message', (_channel, payload) => {
+        notifications.push(JSON.parse(payload) as WorkoutSettledNotification);
+      });
+      await notificationSubscriber.subscribe(getEventsChannelName(userId));
     });
 
     afterAll(async () => {
@@ -121,6 +136,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
       await mongoConnection.model('RawUpload').deleteMany({ user_id: userId });
       await mongoConnection.close();
       redis.disconnect();
+      notificationSubscriber.disconnect();
 
       await purgeAllWorkoutQueues();
       await channel.deleteQueue('test.scratch.retry-routing').catch(() => undefined);
@@ -242,6 +258,26 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
       return null;
     }
 
+    /**
+     * The settled notification for one workout, or null if none arrives.
+     *
+     * Matched by workout id rather than "the last one": these tests share a
+     * user, so a notification left over from a previous case would otherwise be
+     * mistaken for this one's.
+     */
+    async function waitForSettledNotification(
+      workoutId: string,
+      timeoutMs = 20000,
+    ): Promise<WorkoutSettledNotification | null> {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const found = notifications.find((n) => n.workout_id === workoutId);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return null;
+    }
+
     async function waitForStatus(workoutId: string, timeoutMs = 20000): Promise<string> {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
@@ -320,6 +356,51 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
       expect(row.name).toBe('Низ А');
       expect(row.performed_at.toISOString().slice(0, 10)).toBe('2026-08-09');
     }, 25000);
+
+    it('announces a parsed workout with the date the parser extracted, not the one it was created with', async () => {
+      // The whole point of carrying performed_at in the notification: a client
+      // showing the creation week has to learn the workout moved (FR-004). This
+      // is the case specs/003 recorded as out of reach, deferred to FR-013.
+      const createdWith = new Date('2020-01-15T00:00:00.000Z');
+      // A catalogued exercise on purpose — an unmatched one settles as
+      // needs_review, and this case is about the date, not the status.
+      const { workoutId, rawUploadRef } = await seedWorkout(
+        'Низ А - 09.08.2026\nbench press 80kg x8, x8, x6',
+        { performedAt: createdWith },
+      );
+      publishUploaded(workoutId, rawUploadRef);
+      await waitForStatus(workoutId);
+
+      const notification = await waitForSettledNotification(workoutId);
+      expect(notification).not.toBeNull();
+      expect(notification!.type).toBe(WORKOUT_SETTLED_KEY);
+      expect(notification!.status).toBe('parsed');
+      expect(notification!.user_id).toBe(userId);
+
+      // Post-parse, and demonstrably not the creation date.
+      expect(notification!.performed_at.slice(0, 10)).toBe('2026-08-09');
+      expect(notification!.performed_at).not.toBe(createdWith.toISOString());
+
+      // Matches what actually landed in the row — the notification is a pointer
+      // to state, so disagreeing with it would send clients to refetch and see
+      // something else.
+      const [row] = (await dataSource.query('SELECT performed_at FROM workouts WHERE id = $1', [
+        workoutId,
+      ])) as Array<{ performed_at: Date }>;
+      expect(notification!.performed_at).toBe(row.performed_at.toISOString());
+    }, 30000);
+
+    it('announces needs_review as its own status, not as parsed', async () => {
+      // The two share the lists on screen but not the badge, so collapsing them
+      // here would make an unmatched exercise look fully understood.
+      const { workoutId, rawUploadRef } = await seedWorkout('zzz unknown movement 50kg x5');
+      publishUploaded(workoutId, rawUploadRef);
+      await waitForStatus(workoutId);
+
+      const notification = await waitForSettledNotification(workoutId);
+      expect(notification).not.toBeNull();
+      expect(notification!.status).toBe('needs_review');
+    }, 30000);
 
     it('does not overwrite an explicitly client-supplied performedAt even when the text has a different date', async () => {
       const explicitDate = new Date('2020-01-15T00:00:00.000Z');
@@ -501,6 +582,83 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
         expect(msg).not.toBe(false);
         if (msg) channel.ack(msg);
       });
+
+      it('announces a failed workout once retries are exhausted', async () => {
+        // Without this the worst case is silent: the row goes to `failed`, the
+        // client is never told, and the workout sits in the in-flight surface
+        // forever — which SC-012 forbids.
+        const performedAt = new Date('2026-02-20T00:00:00.000Z');
+        const { workoutId } = await seedWorkout('exhausted announce', { performedAt });
+        const event = {
+          event_id: randomUUID(),
+          user_id: userId,
+          workout_id: workoutId,
+          raw_upload_ref: 'x',
+          occurred_at: '',
+        };
+
+        await handleParseFailure(context, await deliverScratchMessage(), event, 4);
+
+        const notification = await waitForSettledNotification(workoutId, 5000);
+        expect(notification).not.toBeNull();
+        expect(notification!.status).toBe('failed');
+        expect(notification!.user_id).toBe(userId);
+        // Read back from the row, never invented: an earlier draft fell back to
+        // `new Date()` here, which would announce today for a workout performed
+        // in February.
+        expect(notification!.performed_at).toBe(performedAt.toISOString());
+      }, 15000);
+
+      it('announces a failed workout only once, however often the message is redelivered', async () => {
+        const { workoutId } = await seedWorkout('double announce');
+        const event = {
+          event_id: randomUUID(),
+          user_id: userId,
+          workout_id: workoutId,
+          raw_upload_ref: 'x',
+          occurred_at: '',
+        };
+
+        await handleParseFailure(context, await deliverScratchMessage(), event, 4);
+        await waitForSettledNotification(workoutId, 5000);
+
+        // Second delivery: the row is already `failed`, so the guarded UPDATE
+        // matches nothing and there is nothing new to announce.
+        await handleParseFailure(context, await deliverScratchMessage(), event, 4);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        const forThisWorkout = notifications.filter((n) => n.workout_id === workoutId);
+        expect(forThisWorkout).toHaveLength(1);
+      }, 15000);
+
+      it('still marks the workout failed when the notification cannot be published', async () => {
+        // FR-030: delivery failing must not fail the change that produced it. A
+        // workout that failed stays failed even if nobody could be told.
+        const { workoutId } = await seedWorkout('publish blows up');
+        const event = {
+          event_id: randomUUID(),
+          user_id: userId,
+          workout_id: workoutId,
+          raw_upload_ref: 'x',
+          occurred_at: '',
+        };
+        const brokenRedis = {
+          publish: () => Promise.reject(new Error('ECONNREFUSED')),
+        } as unknown as Redis;
+
+        await handleParseFailure(
+          { ...context, redis: brokenRedis },
+          await deliverScratchMessage(),
+          event,
+          4,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const [row] = (await dataSource.query('SELECT status FROM workouts WHERE id = $1', [
+          workoutId,
+        ])) as Array<{ status: string }>;
+        expect(row.status).toBe('failed');
+      }, 15000);
 
       it('routes an exhausted (4th) failure to workout.dlq and marks the workout failed', async () => {
         const { workoutId } = await seedWorkout('routing test 2');

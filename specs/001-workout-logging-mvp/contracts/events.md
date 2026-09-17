@@ -46,6 +46,51 @@ of text/image are present, rather than being told upfront.
 }
 ```
 
+## `workout.deleted`
+
+- Routing key: `workout.deleted`
+- Queue: `workout.analytics.q` — **the same queue as `workout.parsed`**, bound
+  to a second routing key. The consumer and the work are identical (recompute
+  one ISO week); a separate queue would only duplicate the retry tiers and DLQ.
+- Published by: `apps/api`, after `DELETE /workouts/:id` commits.
+
+```json
+{
+  "type": "workout.deleted",
+  "event_id": "uuid",
+  "user_id": "uuid",
+  "workout_id": "uuid",
+  "performed_at": "ISO 8601",
+  "occurred_at": "ISO 8601"
+}
+```
+
+Two fields carry weight here:
+
+- **`performed_at`** is mandatory and cannot be looked up. By the time this is
+  consumed the workout row is gone, so the payload is the only source for the
+  week to recompute. `user_id` is in the payload for the same reason.
+- **`type`** is the discriminator, and it lives in the body **on purpose**.
+  `workout.analytics.q`'s retry tiers are named per primary queue and
+  dead-letter with `x-dead-letter-routing-key: workout.parsed`, so a deletion
+  that fails once returns to the queue carrying the *parsed* routing key.
+  Verified against a live broker. A consumer that discriminated on
+  `msg.fields.routingKey` would take the parsed branch, look up a workout that
+  no longer exists, and ack without recomputing — leaving the cached week wrong
+  indefinitely, silently. Only the message body survives every hop intact; the
+  same reasoning drives `x-retry-attempt` being worker-owned rather than read
+  from `x-death`.
+
+Why the event exists at all: nothing else invalidates
+`weekly_volume:{user}:{week}`. `apps/api` reads that hash and only falls back to
+Postgres on a *miss*, so a stale hash is served in full confidence until
+something recomputes the week — up to the 120-day TTL.
+
+Publishing happens after the transaction commits, never inside it: a rolled-back
+delete must not announce itself. The residual gap — process death between commit
+and publish — is left open deliberately; an outbox is disproportionate here, and
+the consequence is staleness, not corruption.
+
 ## Idempotency
 
 Every consumer MUST check `event_id` against the `processed_events`

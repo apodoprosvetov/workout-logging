@@ -1,11 +1,21 @@
+import { randomUUID } from 'node:crypto';
+
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
-import { Workout } from '@workout-logging/shared';
+import {
+  ChangeNotification,
+  Workout,
+  WORKOUT_DELETED_KEY,
+  WORKOUT_DELETED_ROUTING_KEY,
+  WorkoutDeletedEvent,
+} from '@workout-logging/shared';
 
 import { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
 import { paginate } from '../common/pagination';
+import { NotificationsPublisher } from '../events/notifications.publisher';
+import { RabbitMqPublisherService } from '../events/rabbitmq-publisher.service';
 
 // Read/CRUD side of workouts (list/get today; room for delete, patch, and a
 // manual/non-AI-ingested create later) — kept separate from IngestionService,
@@ -13,7 +23,11 @@ import { paginate } from '../common/pagination';
 // (RabbitMQ + Mongo raw_uploads + GridFS), a different concern entirely.
 @Injectable()
 export class WorkoutsService {
-  constructor(@InjectRepository(Workout) private readonly workoutRepository: Repository<Workout>) {}
+  constructor(
+    @InjectRepository(Workout) private readonly workoutRepository: Repository<Workout>,
+    private readonly publisher: RabbitMqPublisherService,
+    private readonly notification: NotificationsPublisher,
+  ) {}
 
   // FR-015: every read scoped to the caller — userId is always an equality
   // filter, never taken from the query/path. Sorted/paginated by performedAt
@@ -39,7 +53,13 @@ export class WorkoutsService {
       .orderBy('w.performedAt', 'DESC')
       .addOrderBy('w.id', 'DESC');
 
-    if (query.status) qb.andWhere('w.status = :status', { status: query.status });
+    // `IN` even for one value, because contracts/api.md promises the
+    // single-value form keeps working and an absent parameter keeps returning
+    // every status — apps/web calls this route with no filter at all today.
+    //
+    // `?.length` guards the empty case on purpose: `IN ()` is a SQL syntax
+    // error, not an empty result.
+    if (query.status?.length) qb.andWhere('w.status IN (:...statuses)', { statuses: query.status });
     if (query.before) qb.andWhere('w.performedAt < :before', { before: new Date(query.before) });
     if (query.after) qb.andWhere('w.performedAt >= :after', { after: new Date(query.after) });
 
@@ -117,5 +137,36 @@ export class WorkoutsService {
       if (workout.workoutExercises.length > 0) await manager.remove(workout.workoutExercises);
       await manager.remove(workout);
     });
+
+    // performedAt is read off the entity loaded above, before the rows go: the
+    // consumer needs the week and has nothing left to look it up from.
+    const event: WorkoutDeletedEvent = {
+      type: 'workout.deleted',
+      event_id: randomUUID(),
+      user_id: userId,
+      workout_id: workoutId,
+      performed_at: workout.performedAt.toISOString(),
+      occurred_at: new Date().toISOString(),
+    };
+
+    // Published after the commit, not inside it — a rolled-back transaction must
+    // not announce a deletion that did not happen.
+    //
+    // The gap that leaves: if this process dies between commit and publish, the
+    // workout is gone but its volume stays in the cache until something else
+    // recomputes that week (or the 120-day TTL expires). An outbox would close
+    // it; that is disproportionate here, and the apps/api read path falls back
+    // to Postgres on a cache miss, so nothing is permanently wrong — only stale.
+    await this.publisher.publish(WORKOUT_DELETED_ROUTING_KEY, event);
+
+    const notification: ChangeNotification = {
+      type: WORKOUT_DELETED_KEY,
+      event_id: randomUUID(),
+      user_id: userId,
+      workout_id: workoutId,
+      occurred_at: new Date().toISOString(),
+      performed_at: workout.performedAt.toISOString(),
+    };
+    await this.notification.publish(notification);
   }
 }

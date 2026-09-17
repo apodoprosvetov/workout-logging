@@ -1,12 +1,9 @@
 import Link from 'next/link';
 
-import {
-  formatPerformedAtShort,
-  statusBadgeClass,
-  statusLabel,
-  WORKOUT_ROW_GRID,
-  type WorkoutListItem,
-} from '@lib/workouts';
+import { type WorkoutListItem } from '@lib/contracts/workouts';
+import { formatPerformedAtShort } from '@lib/display/date-display';
+import { statusLabel } from '@lib/display/workout-display';
+import { statusBadgeClass, WORKOUT_ROW_GRID } from '@lib/ui-styles/workout-styles';
 
 // The one definition of a workout list row — date, name, status, delete —
 // shared by the dashboard's weekly list and the full history (FR-024).

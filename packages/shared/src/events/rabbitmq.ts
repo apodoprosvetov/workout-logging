@@ -5,6 +5,7 @@ import { config as loadEnv } from 'dotenv';
 
 import {
   WORKOUT_ANALYTICS_QUEUE,
+  WORKOUT_DELETED_ROUTING_KEY,
   WORKOUT_DLQ,
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSE_QUEUE,
@@ -80,10 +81,19 @@ async function setupPrimaryQueue(
   }
 }
 
+async function bindPrimaryQueue(
+  channel: Channel,
+  queue: string,
+  routingKey: string,
+): Promise<void> {
+  await channel.bindQueue(queue, WORKOUT_EVENTS_EXCHANGE, routingKey);
+}
+
 export async function setupRabbitMqTopology(channel: Channel): Promise<void> {
   await channel.assertExchange(WORKOUT_EVENTS_EXCHANGE, 'topic', { durable: true });
   await setupPrimaryQueue(channel, WORKOUT_PARSE_QUEUE, WORKOUT_UPLOADED_ROUTING_KEY);
   await setupPrimaryQueue(channel, WORKOUT_ANALYTICS_QUEUE, WORKOUT_PARSED_ROUTING_KEY);
+  await bindPrimaryQueue(channel, WORKOUT_ANALYTICS_QUEUE, WORKOUT_DELETED_ROUTING_KEY);
   // Final dead-letter queue — workers publish here directly once retries are exhausted.
   await channel.assertQueue(WORKOUT_DLQ, { durable: true });
 }

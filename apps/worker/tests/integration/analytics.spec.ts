@@ -4,10 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  ANALYTICS_UPDATED_KEY,
   connectRabbitMq,
   createMongooseConnection,
   createRedisClient,
+  createRedisSubscriber,
   createTypeOrmDataSource,
+  getEventsChannelName,
   isoWeekKey,
   seedExerciseCatalog,
   setupRabbitMqTopology,
@@ -21,6 +24,7 @@ import {
   WorkoutSource,
   WorkoutStatus,
   WORKOUT_ANALYTICS_QUEUE,
+  WORKOUT_DELETED_ROUTING_KEY,
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSED_ROUTING_KEY,
 } from '@workout-logging/shared';
@@ -28,6 +32,7 @@ import {
 import { registerAnalyticsConsumer } from '../../src/analytics/handler.js';
 
 import type { WorkerContext } from '../../src/index.js';
+import type { AnalyticsUpdatedNotification } from '@workout-logging/shared';
 import type { Channel, ChannelModel } from 'amqplib';
 import type { Redis } from 'ioredis';
 import type { Connection as MongooseConnection } from 'mongoose';
@@ -171,6 +176,31 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     );
   }
 
+  // `routingKey` is a parameter because the whole point of the discriminator is
+  // that it must work regardless of it — see the WORKOUT_PARSED_ROUTING_KEY case
+  // in the retry test below.
+  function publishDeleted(
+    workoutId: string,
+    performedAt: string,
+    routingKey: string = WORKOUT_DELETED_ROUTING_KEY,
+  ): void {
+    channel.publish(
+      WORKOUT_EVENTS_EXCHANGE,
+      routingKey,
+      Buffer.from(
+        JSON.stringify({
+          type: 'workout.deleted',
+          event_id: randomUUID(),
+          user_id: userId,
+          workout_id: workoutId,
+          performed_at: performedAt,
+          occurred_at: new Date().toISOString(),
+        }),
+      ),
+      { persistent: true },
+    );
+  }
+
   async function waitForHash(timeoutMs = 8000): Promise<Record<string, string>> {
     const key = weeklyVolumeRedisKey(userId, week);
     const deadline = Date.now() + timeoutMs;
@@ -246,4 +276,173 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
     // 999*999 never lands anywhere
     expect(Object.values(hash).every((v) => Number(v) < 998001)).toBe(true);
   }, 15000);
+
+  it('recomputes the week from a workout.deleted event, whose workout no longer exists', async () => {
+    const performedAt = '2026-05-09T00:00:00.000Z';
+    const id = await seedParsedWorkout(performedAt, [
+      { slug: 'lateral-raise', sets: [{ weight: 10, reps: 12 }] }, // shoulders +120
+    ]);
+    publishParsed(id);
+    await new Promise((r) => setTimeout(r, 800));
+    const before = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
+
+    // Delete it the way apps/api does, then announce it. The consumer has to work
+    // entirely from the payload — there is no row left to look the week up from.
+    await dataSource.query(
+      'DELETE FROM sets WHERE workout_exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id = $1)',
+      [id],
+    );
+    await dataSource.query('DELETE FROM workout_exercises WHERE workout_id = $1', [id]);
+    await dataSource.query('DELETE FROM workouts WHERE id = $1', [id]);
+
+    publishDeleted(id, performedAt);
+    await new Promise((r) => setTimeout(r, 900));
+
+    const after = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
+    expect(after).toBe(before - 120);
+  }, 15000);
+
+  it('still handles a deletion that arrives under the workout.parsed routing key (post-retry)', async () => {
+    // The regression this guards: workout.analytics.q's retry tiers are named per
+    // primary queue and dead-letter with `x-dead-letter-routing-key:
+    // workout.parsed`, so a deletion that fails once comes back to this queue
+    // claiming to be a parse. Verified against the live broker.
+    //
+    // If the handler discriminated on msg.fields.routingKey it would take the
+    // parsed branch, look the workout up, find nothing (it is deleted) and ack —
+    // leaving the cache stale forever, with no error logged. The discriminator
+    // lives in the body precisely so this case still recomputes.
+    const performedAt = '2026-05-10T00:00:00.000Z';
+    const id = await seedParsedWorkout(performedAt, [
+      { slug: 'lateral-raise', sets: [{ weight: 20, reps: 10 }] }, // shoulders +200
+    ]);
+    publishParsed(id);
+    await new Promise((r) => setTimeout(r, 800));
+    const before = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
+
+    await dataSource.query(
+      'DELETE FROM sets WHERE workout_exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id = $1)',
+      [id],
+    );
+    await dataSource.query('DELETE FROM workout_exercises WHERE workout_id = $1', [id]);
+    await dataSource.query('DELETE FROM workouts WHERE id = $1', [id]);
+
+    // The deletion, wearing the routing key a retry hop would have given it.
+    publishDeleted(id, performedAt, WORKOUT_PARSED_ROUTING_KEY);
+    await new Promise((r) => setTimeout(r, 900));
+
+    const after = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
+    expect(after).toBe(before - 200);
+  }, 15000);
+
+  // T036. Not "both happened" — the order, which is the whole requirement: a
+  // notification is an invitation to refetch, so announcing a recomputation
+  // that has not committed races every listening client into reading the
+  // figures the pipeline was about to replace.
+  //
+  // Asserted with MONITOR rather than by reading the hash when the notification
+  // arrives. That reading proves nothing: time passes between the message
+  // landing and the read, so a write that happened *after* the publish would
+  // still be visible by then, and the test would pass on the broken order.
+  // MONITOR reports the commands the server actually executed, in the order it
+  // executed them, so the comparison is on the real sequence.
+  describe('T036: analytics.updated is published after the hash is written', () => {
+    const channelName = () => getEventsChannelName(userId);
+    const volumeKey = () => weeklyVolumeRedisKey(userId, week);
+
+    /**
+     * Runs `trigger`, waits for the notification, and returns the server-side
+     * order of the two commands that matter.
+     *
+     * MONITOR sees every client's traffic on this Redis, so both filters are on
+     * *this* user's key and channel — a dev worker or another suite running
+     * against the same instance would otherwise show up in the log.
+     */
+    async function orderOf(trigger: () => void): Promise<{
+      hsetIndex: number;
+      publishIndex: number;
+      notification: AnalyticsUpdatedNotification | null;
+    }> {
+      const monitorClient = createRedisClient();
+      const monitor = await monitorClient.monitor();
+      const commands: string[][] = [];
+      monitor.on('monitor', (_time: string, args: string[]) => commands.push(args));
+
+      const subscriber = createRedisSubscriber();
+      let notification: AnalyticsUpdatedNotification | null = null;
+      const delivered = new Promise<void>((resolve) => {
+        subscriber.on('message', (_channel: string, payload: string) => {
+          const parsed = JSON.parse(payload) as AnalyticsUpdatedNotification;
+          if (parsed.type === ANALYTICS_UPDATED_KEY) {
+            notification = parsed;
+            resolve();
+          }
+        });
+      });
+      await subscriber.subscribe(channelName());
+
+      try {
+        trigger();
+        await Promise.race([delivered, new Promise((r) => setTimeout(r, 10_000))]);
+        // The monitor stream is asynchronous; give the last commands a moment to
+        // arrive before reading the log.
+        await new Promise((r) => setTimeout(r, 300));
+
+        const isOurs = (args: string[], name: string, target: string) =>
+          args[0]?.toLowerCase() === name && args[1] === target;
+
+        return {
+          hsetIndex: commands.findIndex((a) => isOurs(a, 'hset', volumeKey())),
+          publishIndex: commands.findIndex((a) => isOurs(a, 'publish', channelName())),
+          notification,
+        };
+      } finally {
+        monitor.disconnect();
+        monitorClient.disconnect();
+        subscriber.disconnect();
+      }
+    }
+
+    it('writes the hash before announcing it, on the parsed path', async () => {
+      const id = await seedParsedWorkout('2026-05-05T00:00:00.000Z', [
+        { slug: 'bench-press', sets: [{ weight: 60, reps: 5 }] },
+      ]);
+
+      const { hsetIndex, publishIndex, notification } = await orderOf(() => publishParsed(id));
+
+      expect(notification).not.toBeNull();
+      expect(notification?.iso_week).toBe(week);
+      // Both present, and in this order. `toBeGreaterThan`, not `not.toBe`: the
+      // point is which came first, and -1 for a missing command would sail
+      // through a mere inequality.
+      expect(hsetIndex).toBeGreaterThanOrEqual(0);
+      expect(publishIndex).toBeGreaterThan(hsetIndex);
+    }, 20000);
+
+    it('writes the hash before announcing it, on the deleted path too', async () => {
+      // The path whose week cannot be derived — the workout is gone by the time
+      // the handler runs, so `iso_week` has to come from the payload.
+      const performedAt = '2026-05-06T00:00:00.000Z';
+      const id = await seedParsedWorkout(performedAt, [
+        { slug: 'squat', sets: [{ weight: 80, reps: 5 }] },
+      ]);
+      publishParsed(id);
+      await new Promise((r) => setTimeout(r, 900));
+
+      await dataSource.query(
+        'DELETE FROM sets WHERE workout_exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id = $1)',
+        [id],
+      );
+      await dataSource.query('DELETE FROM workout_exercises WHERE workout_id = $1', [id]);
+      await dataSource.query('DELETE FROM workouts WHERE id = $1', [id]);
+
+      const { hsetIndex, publishIndex, notification } = await orderOf(() =>
+        publishDeleted(id, performedAt),
+      );
+
+      expect(notification?.iso_week).toBe(week);
+      expect(hsetIndex).toBeGreaterThanOrEqual(0);
+      expect(publishIndex).toBeGreaterThan(hsetIndex);
+    }, 20000);
+  });
 });

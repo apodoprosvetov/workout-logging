@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   deleteWorkoutImages,
   getWorkoutImagesBucket,
+  publishNotification,
   RawUploadDocument,
   SetUnit,
   withEventIdempotency,
@@ -16,13 +17,16 @@ import {
   WORKOUT_PARSE_QUEUE,
   WORKOUT_PARSED_ROUTING_KEY,
   downloadWorkoutImage,
+  WorkoutSettledNotification,
+  WORKOUT_SETTLED_KEY,
+  workoutsRepository,
 } from '@workout-logging/shared';
 
+import { log } from '../logger.js';
 import { extractWorkout } from './claude.js';
 import { matchAndUpsertExercise } from './exercise-matcher.js';
 import { detectImageMediaType, ImageMediaType } from './image-media-type.js';
-import { handleParseFailure, markWorkoutFailed, NonRetryableParseError } from './retry.js';
-import { log } from '../logger.js';
+import { handleParseFailure, NonRetryableParseError } from './retry.js';
 
 import type { WorkerContext } from '../index.js';
 import type { ConsumeMessage } from 'amqplib';
@@ -52,13 +56,16 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
       context.channel.publish(
         WORKOUT_EVENTS_EXCHANGE,
         WORKOUT_PARSED_ROUTING_KEY,
-        Buffer.from(JSON.stringify(outcome.result)),
+        Buffer.from(JSON.stringify(outcome.result.parsedEvent)),
         { persistent: true },
       );
+
+      await publishNotification(context.redis, outcome.result.settledNotification, log);
+
       log.info('workout parsed', {
         workout_id: event.workout_id,
         event_id: event.event_id,
-        exercise_count: outcome.result.exercise_count,
+        exercise_count: outcome.result.parsedEvent.exercise_count,
       });
     } else {
       log.info('workout.uploaded redelivered, already processed', {
@@ -77,7 +84,33 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
         reason: err.message,
       });
       try {
-        await markWorkoutFailed(context.dataSource, event.workout_id);
+        const settled = await workoutsRepository(context.dataSource).markFailed(event.workout_id);
+
+        // Only announce a transition that actually happened. `null` means the
+        // guard matched nothing — the workout had already left `pending`, so it
+        // was announced once and a redelivery must not announce it again.
+        //
+        // Never invent a date here either: a fallback like `new Date()` would
+        // publish today for a workout performed weeks ago, and the client uses
+        // this field to decide which week a change concerns.
+        if (settled) {
+          await publishNotification(
+            context.redis,
+            {
+              type: WORKOUT_SETTLED_KEY,
+              // A fresh id and timestamp: the failure is its own occurrence, not
+              // the upload's. `event.occurred_at` is when the workout was
+              // submitted, which can be minutes and three retries ago.
+              event_id: randomUUID(),
+              user_id: settled.userId,
+              occurred_at: new Date().toISOString(),
+              workout_id: event.workout_id,
+              status: WorkoutStatus.FAILED,
+              performed_at: settled.performedAt.toISOString(),
+            },
+            log,
+          );
+        }
       } catch (markErr) {
         log.error('failed to mark workout failed', { workout_id: event.workout_id, err: markErr });
       }
@@ -93,7 +126,7 @@ async function processWorkout(
   context: WorkerContext,
   manager: EntityManager,
   event: WorkoutUploadedEvent,
-): Promise<WorkoutParsedEvent> {
+): Promise<{ parsedEvent: WorkoutParsedEvent; settledNotification: WorkoutSettledNotification }> {
   const rawUploadModel = context.mongoConnection.model<RawUploadDocument>('RawUpload');
   const rawUpload = await rawUploadModel.findById(event.raw_upload_ref);
   if (!rawUpload) {
@@ -197,12 +230,24 @@ async function processWorkout(
     })
     .execute();
 
+  const eventId = randomUUID();
+  const occurredAt = new Date().toISOString();
   const parsedEvent: WorkoutParsedEvent = {
-    event_id: randomUUID(),
+    event_id: eventId,
     user_id: event.user_id,
     workout_id: event.workout_id,
     exercise_count: extracted.exercises.length,
-    occurred_at: new Date().toISOString(),
+    occurred_at: occurredAt,
+  };
+
+  const settledNotification: WorkoutSettledNotification = {
+    user_id: event.user_id,
+    event_id: eventId,
+    occurred_at: occurredAt,
+    type: WORKOUT_SETTLED_KEY,
+    workout_id: event.workout_id,
+    status: status,
+    performed_at: (updates.performedAt ?? workoutRow.performedAt).toISOString(),
   };
 
   // Images are transient (research.md #11) — this is a terminal status
@@ -223,5 +268,8 @@ async function processWorkout(
     }
   }
 
-  return parsedEvent;
+  return {
+    parsedEvent,
+    settledNotification,
+  };
 }

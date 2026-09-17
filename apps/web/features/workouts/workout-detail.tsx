@@ -4,12 +4,10 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
 import { useRequireAuth } from '@hooks/use-require-auth';
-import {
-  formatPerformedAt,
-  statusBadgeClass,
-  statusLabel,
-  type WorkoutDetail as WorkoutDetailData,
-} from '@lib/workouts';
+import { type WorkoutDetail as WorkoutDetailData } from '@lib/contracts/workouts';
+import { formatPerformedAt } from '@lib/display/date-display';
+import { statusLabel } from '@lib/display/workout-display';
+import { statusBadgeClass } from '@lib/ui-styles/workout-styles';
 import { getWorkout } from '@services/workouts';
 
 export function WorkoutDetail({ id }: { id: string }) {

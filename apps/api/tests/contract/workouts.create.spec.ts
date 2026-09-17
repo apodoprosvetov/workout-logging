@@ -1,7 +1,7 @@
 import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import mongoose from 'mongoose';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   connectRabbitMq,
@@ -9,12 +9,17 @@ import {
   createRedisClient,
   createTypeOrmDataSource,
   getWorkoutImagesBucket,
+  WORKOUT_CREATED_KEY,
   WORKOUT_PARSE_QUEUE,
 } from '@workout-logging/shared';
 
 import { AuthModule } from '../../src/auth/auth.module';
+import { REDIS_CLIENT } from '../../src/redis/redis.module';
 import { WorkoutsModule } from '../../src/workouts/workouts.module';
+import { NotificationListener } from '../helpers/notifications';
 import { createTestApp, deleteTestUsers, httpServer, testEmailFactory } from '../helpers/test-app';
+
+import type Redis from 'ioredis';
 
 // A real 1x1 PNG — the parser worker (T044) rejects any image whose magic bytes
 // aren't a known format, so an upload fixture has to be a genuine image now.
@@ -344,5 +349,97 @@ describe('POST /workouts (contract, per contracts/api.md)', () => {
     expect(accepted).toBe(30);
     expect(limited).toBe(1);
     expect(responses[30]).toBe(429);
+  });
+
+  // T040. Two properties, and the second is the one that needs a test: the
+  // first would fail loudly, the second fails by making a request 500 that
+  // should have succeeded.
+  describe('workout.created notification (T038, FR-030)', () => {
+    it('publishes workout.created on the owner channel, matching the response', async () => {
+      const { accessToken } = await registerAndGetToken('notify');
+      const listener = await NotificationListener.open(accessToken);
+
+      try {
+        const res = await request(httpServer(app))
+          .post('/api/workouts')
+          .set('authorization', `Bearer ${accessToken}`)
+          .field('text', 'overhead press 50kg x8')
+          .field('performed_at', '2026-05-12');
+        expect(res.status).toBe(202);
+
+        const note = await listener.waitFor((n) => n.type === WORKOUT_CREATED_KEY);
+        expect(note).not.toBeNull();
+        // Asserted against the *response*, not against the values sent: when
+        // performed_at is omitted the server picks the date, and the two have to
+        // agree or the client and its other sessions land on different weeks.
+        expect(note).toMatchObject({
+          type: WORKOUT_CREATED_KEY,
+          user_id: listener.userId,
+          workout_id: res.body.workout_id,
+          performed_at: res.body.performed_at,
+        });
+      } finally {
+        listener.close();
+      }
+    });
+
+    it('still returns 202 when the notification cannot be published (FR-030)', async () => {
+      // The realistic failure is Redis being unreachable, so that is what is
+      // broken here — not the publisher method. Stubbing the method would test
+      // that the caller catches a throw, which it deliberately does not: the
+      // never-throw guarantee lives in packages/shared's publishNotification,
+      // and this asserts the guarantee reaches the request.
+      const { accessToken } = await registerAndGetToken('notifyfail');
+      const redis = app.get<Redis>(REDIS_CLIENT);
+      const publish = vi
+        .spyOn(redis, 'publish')
+        .mockRejectedValue(new Error('redis is down') as never);
+
+      try {
+        const res = await request(httpServer(app))
+          .post('/api/workouts')
+          .set('authorization', `Bearer ${accessToken}`)
+          .field('text', 'front squat 70kg x5');
+
+        expect(res.status).toBe(202);
+        expect(res.body.workout_id).toEqual(expect.any(String));
+        // And the publish really was attempted — otherwise this would pass just
+        // as well with the notification removed entirely.
+        expect(publish).toHaveBeenCalled();
+      } finally {
+        publish.mockRestore();
+      }
+    });
+
+    it('writes the workout even though the notification failed', async () => {
+      // The half that matters after the 202: a swallowed notification must not
+      // swallow the work. The row is what the parse pipeline and every later
+      // read depend on.
+      const { accessToken } = await registerAndGetToken('notifyfailrow');
+      const redis = app.get<Redis>(REDIS_CLIENT);
+      const publish = vi
+        .spyOn(redis, 'publish')
+        .mockRejectedValue(new Error('redis is down') as never);
+
+      let workoutId: string;
+      try {
+        const res = await request(httpServer(app))
+          .post('/api/workouts')
+          .set('authorization', `Bearer ${accessToken}`)
+          .field('text', 'romanian deadlift 90kg x8');
+        expect(res.status).toBe(202);
+        workoutId = res.body.workout_id as string;
+      } finally {
+        publish.mockRestore();
+      }
+
+      const ds = createTypeOrmDataSource();
+      await ds.initialize();
+      const rows = (await ds.query('SELECT id FROM workouts WHERE id = $1', [
+        workoutId,
+      ])) as unknown[];
+      await ds.destroy();
+      expect(rows).toHaveLength(1);
+    });
   });
 });

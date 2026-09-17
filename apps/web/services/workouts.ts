@@ -1,9 +1,9 @@
 // HTTP operations against apps/api's /workouts routes.
 //
-// Distinct from lib/workouts.ts, which holds the contract *types* and pure
-// formatters — this is the IO half (plan.md: services/ for IO clients, lib/ for
-// pure helpers and types). At the import site the alias keeps them apart:
-// `@services/workouts` calls the API, `@lib/workouts` describes its shapes.
+// Distinct from lib/contracts/workouts.ts, which holds the contract *types* —
+// this is the IO half (plan.md: services/ for IO clients, lib/ for pure helpers
+// and types). At the import site the alias keeps them apart:
+// `@services/workouts` calls the API, `@lib/contracts/workouts` describes its shapes.
 //
 // Extension contract — follow it when adding listWorkouts, getWorkout,
 // createWorkout and the rest, so callers can predict a new function without
@@ -23,7 +23,7 @@
 
 import { ApiError, apiFetch, apiJson } from './api-client';
 
-import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/workouts';
+import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/contracts/workouts';
 
 /**
  * Query for {@link listWorkouts}, mirroring `GET /workouts` in contracts/api.md.
@@ -37,7 +37,7 @@ import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/wor
  * to fetch a single week.
  */
 export interface ListWorkoutsQuery {
-  status?: WorkoutStatus;
+  status?: WorkoutStatus[];
   page?: number;
   per_page?: number;
   /** ISO 8601. Exclusive upper bound on `performed_at`. */
@@ -56,7 +56,11 @@ export interface ListWorkoutsQuery {
  */
 export async function listWorkouts(query: ListWorkoutsQuery = {}): Promise<WorkoutListResponse> {
   const params = new URLSearchParams();
-  if (query.status) params.set('status', query.status);
+  if (query.status?.length) {
+    for (const st of query.status) {
+      params.append('status', st);
+    }
+  }
   if (query.page !== undefined) params.set('page', String(query.page));
   if (query.per_page !== undefined) params.set('per_page', String(query.per_page));
   if (query.before) params.set('before', query.before);

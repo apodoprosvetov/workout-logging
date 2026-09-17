@@ -4,8 +4,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { WorkoutTable } from '@components/workout-table';
 import { useRequireAuth } from '@hooks/use-require-auth';
-import { FIRST_PAGE } from '@lib/pagination';
-import { type WorkoutListResponse } from '@lib/workouts';
+import { FIRST_PAGE } from '@lib/contracts/pagination';
+import {
+  STATUS_NEEDS_REVIEW,
+  STATUS_PARSED,
+  type WorkoutListResponse,
+} from '@lib/contracts/workouts';
 import { publishWorkoutDeleted, useWorkoutLog } from '@services/workout-events';
 import { deleteWorkout, listWorkouts } from '@services/workouts';
 
@@ -30,9 +34,34 @@ export function WorkoutList() {
   const load = useCallback(async (forPage: number) => {
     const seq = (requestSeq.current += 1);
     setError(null);
-    setResult(null);
+    // Blank the list only when the answer will be a different set of rows —
+    // a page change. Refetching the page already on screen keeps its rows
+    // mounted, and that is the whole scroll fix (FR-017).
+    //
+    // Unmounting them collapses the document to the height of "Loading…", the
+    // browser clamps the scroll offset to that shorter page, and the offset does
+    // not come back when the rows do. Measured against a real notification with
+    // `setResult(null)` here: rows 20 → 0, "Loading…" shown, offset 106 → 0, all
+    // within 13ms, and the offset stayed 0 afterwards. Too fast to look like
+    // loading and too slow to be invisible — it reads as the page throwing the
+    // reader back to the top. This refetch is triggered by a worker settling a
+    // workout, not by the reader, so it can land at any moment mid-read.
+    //
+    // Preferred over saving and restoring window.scrollY because there is
+    // nothing to restore *to*: the browser clamps the offset the moment the
+    // document shrinks, so the value is already gone by the time a layout effect
+    // could read it back. Not unmounting avoids the problem instead of chasing
+    // it. What this does not do is keep the reader glued to a particular
+    // workout: a newly settled one prepends, every row below shifts down a slot,
+    // and the offset stays put — verified. FR-017 asks for the scroll position,
+    // and that is what is preserved.
+    setResult((current) => (current !== null && current.page === forPage ? current : null));
     try {
-      const result = await listWorkouts({ page: forPage, per_page: PER_PAGE });
+      const result = await listWorkouts({
+        page: forPage,
+        per_page: PER_PAGE,
+        status: [STATUS_NEEDS_REVIEW, STATUS_PARSED],
+      });
       if (seq !== requestSeq.current) return;
       setResult(result);
     } catch {
@@ -44,14 +73,15 @@ export function WorkoutList() {
   // A workout logged from the header belongs at the top of this list, so
   // refetch when one is announced (FR-011). The revision is the dependency —
   // the date is the dashboard's business, not this list's.
-  const { revision } = useWorkoutLog();
+  const { revision, changeType } = useWorkoutLog();
 
   useEffect(() => {
+    if (changeType === 'analytics.updated') return;
     // React's documented fetch-in-effect pattern (no data lib in this project) —
     // same as workout-detail.tsx / weekly-workouts.tsx.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (ready) void load(page);
-  }, [ready, page, revision, load]);
+  }, [ready, page, revision, changeType, load]);
 
   // Optimistic: the row goes immediately and comes back if the request fails.
   // That is what keeps WorkoutTable stateless — with no in-flight window there
@@ -118,11 +148,17 @@ export function WorkoutList() {
 
       {!error && result === null && <p className="text-sm text-zinc-500">Loading…</p>}
 
-      {!error && result !== null && result.data.length === 0 && (
+      {/* Rendered even when `error` is set, unlike the loading line above. An
+          error here can arrive on top of a list that is already on screen — a
+          background refetch that failed, or a delete that did — and hiding the
+          rows to show the banner would collapse the document and lose the
+          scroll offset just as surely as unmounting them in `load` would. The
+          banner reports the failure; the rows stay readable underneath. */}
+      {result !== null && result.data.length === 0 && (
         <p className="text-sm text-zinc-500">No workouts logged yet.</p>
       )}
 
-      {!error && result !== null && result.data.length > 0 && (
+      {result !== null && result.data.length > 0 && (
         <WorkoutTable workouts={result.data} onDelete={remove} />
       )}
 

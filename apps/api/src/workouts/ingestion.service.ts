@@ -15,8 +15,11 @@ import {
   WorkoutStatus,
   WorkoutUploadedEvent,
   WORKOUT_UPLOADED_ROUTING_KEY,
+  ChangeNotification,
+  WORKOUT_CREATED_KEY,
 } from '@workout-logging/shared';
 
+import { NotificationsPublisher } from '../events/notifications.publisher';
 import { RabbitMqPublisherService } from '../events/rabbitmq-publisher.service';
 
 export interface IngestInput {
@@ -41,6 +44,7 @@ export class IngestionService {
     @InjectModel('RawUpload') private readonly rawUploadModel: Model<RawUploadDocument>,
     @InjectConnection() private readonly mongoConnection: Connection,
     private readonly publisher: RabbitMqPublisherService,
+    private readonly notification: NotificationsPublisher,
   ) {}
 
   async ingest(input: IngestInput): Promise<IngestResult> {
@@ -91,6 +95,16 @@ export class IngestionService {
       occurred_at: new Date().toISOString(),
     };
     this.publisher.publish(WORKOUT_UPLOADED_ROUTING_KEY, event);
+
+    const notification: ChangeNotification = {
+      type: WORKOUT_CREATED_KEY,
+      event_id: randomUUID(),
+      user_id: input.userId,
+      occurred_at: new Date().toISOString(),
+      workout_id: workout.id,
+      performed_at: workout.performedAt.toISOString(),
+    };
+    await this.notification.publish(notification);
 
     // performedAt is returned, not just stored: when the caller omits it this
     // is the only way to learn the date the workout actually landed on, and a

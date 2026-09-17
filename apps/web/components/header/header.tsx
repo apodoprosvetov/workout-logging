@@ -1,8 +1,9 @@
 // Imported by app/(main)/layout.tsx and app/(auth)/layout.tsx, which are
 // Server Components — a root layout exporting `metadata` cannot be a Client
 // Component, so the client boundary has to be declared here rather than
-// higher up. Everything Header pulls in (LogWorkoutButton, LogWorkoutForm)
-// joins the client graph through this directive.
+// higher up. Everything Header pulls in — LogWorkoutButton, and through it
+// Modal, LogWorkoutForm and the in-flight surface — joins the client graph
+// through this directive.
 'use client';
 
 import Link from 'next/link';
@@ -18,8 +19,14 @@ import { logout } from '@services/auth';
 // a bare <Header />: a signed-out visitor was offered "Log out" for as long as
 // the redirect to /login took (FR-020, SC-006).
 //
-// Asking the session directly cannot be forgotten, and matches LogWorkoutButton,
-// which already gates itself the same way.
+// Asking the session directly cannot be forgotten.
+//
+// The same check also gates LogWorkoutButton, and there it is load-bearing
+// rather than tidiness: that component calls `useInFlight`, whose hooks run
+// before any early `return null` inside it could, so it cannot gate itself.
+// Mounted while signed out it fetches `/workouts` and opens the `/api/events`
+// stream, both 401ing on repeat — measured on /login. Keeping it out of the
+// tree is the fix; do not move the check back into the component.
 export function Header() {
   const router = useRouter();
   const authenticated = useIsAuthenticated();
@@ -35,15 +42,17 @@ export function Header() {
         Workout Logging
       </Link>
       <div className="flex items-center gap-4">
-        <LogWorkoutButton />
         {authenticated && (
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-sm font-medium text-zinc-600 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-          >
-            Log out
-          </button>
+          <>
+            <LogWorkoutButton />
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-sm font-medium text-zinc-600 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            >
+              Log out
+            </button>
+          </>
         )}
       </div>
     </header>

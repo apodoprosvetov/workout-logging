@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { weekKeyForOffset, type WeeklyVolumeResponse } from '@lib/analytics';
+import { type WeeklyVolumeResponse } from '@lib/contracts/analytics';
+import { weekKeyForOffset } from '@lib/weeks';
 import { getWeeklyVolume } from '@services/analytics';
 import { useWorkoutLog } from '@services/workout-events';
 
@@ -21,21 +22,32 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
   const [error, setError] = useState<string | null>(null);
 
   // A logged workout changes this week's volume once the worker parses it, so
-  // refetch on a log too (FR-011). Volume for a still-pending workout is 0, so
-  // the refetch may show no change yet — that is FR-013, not a bug here.
-  const { revision } = useWorkoutLog();
+  // refetch on a log too (FR-011). The refetch at log time still shows no
+  // change — a pending workout contributes 0 — but that is no longer where the
+  // story ends: the `analytics.updated` that follows the recomputation brings
+  // the real figure, which is what this spec added the channel for.
+  const { revision, isoWeek } = useWorkoutLog();
+  const seenRevision = useRef(revision);
 
-  // Guards against an out-of-order response overwriting a newer one. Logging a
-  // workout into another week fires two loads in quick succession — one for the
-  // week on screen, then one for the week the dashboard jumps to (FR-012) — and
-  // nothing cancels the first. Without this the older, usually empty, response
-  // can land last and blank the panel. Seen live during the quickstart pass.
+  // Guards against an out-of-order response overwriting a newer one. A workout
+  // settling into another week fires two loads in quick succession — one for the
+  // week on screen, then one for the week the dashboard follows it to (FR-018's
+  // one exception) — and nothing cancels the first. Without this the older,
+  // usually empty, response can land last and blank the panel. Seen live during
+  // the quickstart pass, when the jump still happened at submission.
   const requestSeq = useRef(0);
 
-  const load = useCallback(async (offset: number) => {
+  /**
+   * `replace` says whether the bars on screen are about to be superseded by a
+   * different week's, or merely re-read. See weekly-workouts.tsx for the full
+   * reasoning: a week change is a replacement, a refetch of the week already on
+   * screen is not, and blanking there makes the panel flicker on every change
+   * the reader did not cause.
+   */
+  const load = useCallback(async (offset: number, replace: boolean) => {
     const seq = (requestSeq.current += 1);
     setError(null);
-    setData(null);
+    if (replace) setData(null);
     try {
       const result = await getWeeklyVolume(weekKeyForOffset(offset));
       if (seq !== requestSeq.current) return;
@@ -46,11 +58,27 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
     }
   }, []);
 
+  // Two effects — see weekly-workouts.tsx for the full reasoning; the same
+  // split, for the same measured failure. In short: the week the user asked for
+  // loads unconditionally, because `seenRevision` starts equal to `revision` and
+  // a guard in front of it would block every mount and every arrow press.
   useEffect(() => {
     // React's documented fetch-in-effect pattern (no data lib in this project).
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load(weeksAgo);
-  }, [weeksAgo, revision, load]);
+    void load(weeksAgo, true);
+  }, [weeksAgo, load]);
+
+  // Changes from elsewhere: refetch only when they land in the week on screen
+  // (FR-019). Unlike the weekly list, `analytics.updated` is exactly what this
+  // panel exists to react to, so it is not filtered out by type here — only by
+  // week.
+  useEffect(() => {
+    if (revision === seenRevision.current) return;
+    seenRevision.current = revision;
+    if (isoWeek !== null && isoWeek !== weekKeyForOffset(weeksAgo)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load(weeksAgo, false);
+  }, [weeksAgo, revision, isoWeek, load]);
 
   const max = data && data.volumes.length > 0 ? data.volumes[0].volume : 0;
 
@@ -67,7 +95,7 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
           <span>{error}</span>
           <button
             type="button"
-            onClick={() => void load(weeksAgo)}
+            onClick={() => void load(weeksAgo, true)}
             className="font-medium underline"
           >
             Retry
@@ -77,13 +105,14 @@ export function VolumeChart({ weeksAgo }: { weeksAgo: number }) {
 
       {!error && data === null && <p className="text-sm text-zinc-500">Loading…</p>}
 
-      {!error && data !== null && data.volumes.length === 0 && (
+      {/* Rendered even when `error` is set — see weekly-workouts.tsx. */}
+      {data !== null && data.volumes.length === 0 && (
         <p className="text-sm text-zinc-500">
           No volume for this week yet — matched workouts show up here a moment after parsing.
         </p>
       )}
 
-      {!error && data !== null && data.volumes.length > 0 && (
+      {data !== null && data.volumes.length > 0 && (
         <ul className="flex flex-col gap-2">
           {data.volumes.map((v) => (
             <li
