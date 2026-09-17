@@ -16,6 +16,7 @@ import {
 } from '@workout-logging/shared';
 
 import { AllExceptionsFilter } from '../../src/common/all-exceptions.filter';
+import { OutboxReconciliationService } from '../../src/events/outbox-reconciliation.service';
 import { OutboxRelayService } from '../../src/events/outbox-relay.service';
 
 // Shared harness for contract/integration tests: boots a real Nest+Fastify app
@@ -66,6 +67,15 @@ export async function createTestApp(
     await app.get(OutboxRelayService, { strict: false }).onModuleDestroy();
   } catch {
     // No relay in this module graph; nothing to stop.
+  }
+
+  // Same reasoning for the reconciliation sweep: it rewrites `published_at` on
+  // rows belonging to any pending workout, which is exactly the column other
+  // specs assert on.
+  try {
+    await app.get(OutboxReconciliationService, { strict: false }).onModuleDestroy();
+  } catch {
+    // Not in this module graph.
   }
 
   return app;
