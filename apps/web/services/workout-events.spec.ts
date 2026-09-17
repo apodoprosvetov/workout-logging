@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EventStreamHandlers } from './event-stream';
 
@@ -21,8 +21,14 @@ vi.mock('./event-stream', () => ({
   },
 }));
 
-const { getSnapshot, publishWorkoutDeleted, publishWorkoutLogged, subscribe } =
-  await import('./workout-events');
+const {
+  getChannelStatus,
+  getSnapshot,
+  publishWorkoutDeleted,
+  publishWorkoutLogged,
+  subscribe,
+  subscribeToChannelStatus,
+} = await import('./workout-events');
 
 /** Opens the channel the way a mounting consumer does, and returns the unsubscribe. */
 function mountConsumer(): () => void {
@@ -72,6 +78,14 @@ describe('workout-events store', () => {
   beforeEach(() => {
     unsubscribe?.();
     unsubscribe = mountConsumer();
+  });
+
+  // Without this the last test's subscription outlives the block, and since the
+  // store is a module singleton its listener count never returns to zero — the
+  // channel stays open for every later suite in this file, which is exactly
+  // what the status tests below need to be able to close.
+  afterAll(() => {
+    unsubscribe?.();
   });
 
   describe('convergence (FR-020)', () => {
@@ -366,5 +380,149 @@ describe('workout-events store', () => {
       deliverRemote('2026-09-07T00:00:00.000Z', { workoutId: 'w-gone', status: 'failed' });
       expect(getSnapshot().origin).toBe('remote');
     });
+  });
+});
+
+// The status half of this module. Exercised through the captured handlers the
+// same way notifications are, so what is tested is the wiring the app actually
+// runs — `setChannelStatus` is private for the same reason `publishRemote` is.
+describe('channel status (FR-025, data-model.md)', () => {
+  /** Drives a status change the way the stream does. */
+  function deliverStatus(status: 'connecting' | 'live' | 'offline'): void {
+    captured.handlers?.onStatus?.(status);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  /** Tears the channel down and lets the 1s close debounce elapse. */
+  function closeChannelAndSettle(unsub: () => void): void {
+    unsub();
+    vi.advanceTimersByTime(1100);
+  }
+
+  it('starts at connecting, not offline', () => {
+    // Nothing has failed before the first attempt. Starting at `offline` would
+    // tell every user their data is not live at the moment it was fetched.
+    const unsub = mountConsumer();
+
+    expect(getChannelStatus()).toBe('connecting');
+
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('reports what the stream reports', () => {
+    const unsub = mountConsumer();
+
+    deliverStatus('live');
+    expect(getChannelStatus()).toBe('live');
+    deliverStatus('offline');
+    expect(getChannelStatus()).toBe('offline');
+
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('notifies status subscribers', () => {
+    const unsub = mountConsumer();
+    const seen: string[] = [];
+    const unsubStatus = subscribeToChannelStatus(() => seen.push(getChannelStatus()));
+
+    deliverStatus('live');
+    deliverStatus('offline');
+
+    expect(seen).toEqual(['live', 'offline']);
+
+    unsubStatus();
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('does not notify twice for the same status', () => {
+    const unsub = mountConsumer();
+    const listener = vi.fn();
+    const unsubStatus = subscribeToChannelStatus(listener);
+
+    deliverStatus('live');
+    deliverStatus('live');
+    deliverStatus('live');
+
+    // useSyncExternalStore re-renders every subscriber on each notification,
+    // so a channel repeating itself would re-render the whole tree for nothing.
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubStatus();
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('does not touch revision, so a status change refetches nothing', () => {
+    const unsub = mountConsumer();
+    const before = getSnapshot().revision;
+    const dataListener = vi.fn();
+    const unsubData = subscribe(dataListener);
+
+    deliverStatus('live');
+    deliverStatus('offline');
+    deliverStatus('live');
+
+    // The whole reason status is a separate store. A 15-minute access token
+    // means the channel reconnects several times an hour; if that moved
+    // `revision`, every mounted list would refetch on a transition that means
+    // nothing about the data changed.
+    expect(getSnapshot().revision).toBe(before);
+    expect(dataListener).not.toHaveBeenCalled();
+
+    unsubData();
+    closeChannelAndSettle(unsub);
+    vi.useRealTimers();
+  });
+
+  it('stops claiming live once the channel is torn down', () => {
+    // Reachable by signing out on a dashboard with a healthy channel: the
+    // socket goes away and, without the reset, the status still reads `live`
+    // with nothing behind it — the stale-as-live claim FR-025 forbids.
+    const unsub = mountConsumer();
+    deliverStatus('live');
+
+    closeChannelAndSettle(unsub);
+
+    expect(getChannelStatus()).toBe('connecting');
+    vi.useRealTimers();
+  });
+
+  it('keeps reporting live across a navigation', () => {
+    // React unmounts the old page's consumers before mounting the new page's,
+    // so the count dips to zero on every route change. The stream survives
+    // that by design, and the status has to survive it too — resetting on the
+    // dip would flash `connecting` on every navigation.
+    const unsub = mountConsumer();
+    deliverStatus('live');
+
+    unsub();
+    const unsubNext = mountConsumer();
+    vi.advanceTimersByTime(1100);
+
+    expect(getChannelStatus()).toBe('live');
+
+    closeChannelAndSettle(unsubNext);
+    vi.useRealTimers();
+  });
+
+  it('can be read without opening the channel', () => {
+    const startsBefore = captured.starts;
+
+    const unsubStatus = subscribeToChannelStatus(() => {});
+    expect(getChannelStatus()).toBe('connecting');
+
+    // A status indicator renders on screens that display nothing the channel
+    // could update. If subscribing opened a stream, those screens would each
+    // hold a connection against the per-user cap (FR-028).
+    expect(captured.starts).toBe(startsBefore);
+
+    unsubStatus();
+    vi.useRealTimers();
   });
 });

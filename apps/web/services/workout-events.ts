@@ -7,6 +7,7 @@ import { isoWeekKey } from '@lib/weeks';
 import { loadTokens, subscribeToSession } from './api-client';
 import { startEventStream } from './event-stream';
 
+import type { ChannelStatus } from './event-stream';
 import type {
   ChangeNotification,
   NotificationType,
@@ -161,6 +162,75 @@ const loggedInThisTab = new Set<string>();
 let snapshot: WorkoutLogSnapshot = INITIAL;
 const listeners = new Set<() => void>();
 
+// ---------------------------------------------------------------------------
+// Channel status
+//
+// A second store beside the one above, sharing this module but deliberately
+// not its snapshot. Putting `status` on WorkoutLogSnapshot would have been one
+// fewer moving part, and it is wrong for a reason that is not stylistic: every
+// publish increments `revision`, and consumers refetch on `revision`. A channel
+// that reconnects on a 15-minute token expiry changes status at least four
+// times an hour, so folding the two together would refetch every mounted list
+// on a transition that means nothing changed. Two stores, two subscriber sets,
+// no shared revision.
+//
+// (T046 will bump `revision` on reconnect on purpose — that is a different
+// claim, "the outage may have hidden a change", and it is deliberately not
+// what a status transition says.)
+// ---------------------------------------------------------------------------
+
+// `connecting`, not `offline`, as the starting value. Nothing has failed before
+// the first attempt, and `offline` on a fresh page load would tell every user
+// their data is not live at the exact moment it was fetched.
+const INITIAL_STATUS: ChannelStatus = 'connecting';
+
+let channelStatus: ChannelStatus = INITIAL_STATUS;
+const statusListeners = new Set<() => void>();
+
+function setChannelStatus(next: ChannelStatus): void {
+  if (channelStatus === next) return;
+  channelStatus = next;
+  for (const listener of [...statusListeners]) listener();
+}
+
+export function getChannelStatus(): ChannelStatus {
+  return channelStatus;
+}
+
+/**
+ * Prerender value, and the reason this store has one at all.
+ *
+ * apps/web is a static export: these pages are built on a machine with no
+ * session and no stream. Returning the client's initial value keeps hydration
+ * from observing a transition that never happened.
+ */
+function getServerChannelStatus(): ChannelStatus {
+  return INITIAL_STATUS;
+}
+
+/**
+ * Exported beside `getChannelStatus` for the same reason `subscribe` is: this
+ * pair is the store's contract, and exporting it is what lets the behaviour be
+ * tested without a DOM (plan.md, the Principle II decision).
+ */
+export function subscribeToChannelStatus(listener: () => void): () => void {
+  statusListeners.add(listener);
+  return () => statusListeners.delete(listener);
+}
+
+/**
+ * What a screen may say about the update channel (data-model.md, FR-025).
+ *
+ * Read-only and safe to call anywhere: subscribing to the status does **not**
+ * open the channel. Only `useWorkoutLog` does that, because only a consumer of
+ * the data has a reason to. A status indicator that opened a stream merely by
+ * rendering would hold a connection open on screens that display nothing it
+ * could update, against the per-user cap of FR-028.
+ */
+export function useChannelStatus(): ChannelStatus {
+  return useSyncExternalStore(subscribeToChannelStatus, getChannelStatus, getServerChannelStatus);
+}
+
 let stopStream: (() => void) | null = null;
 let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -293,6 +363,7 @@ function openChannel(): void {
 
   stopStream = startEventStream({
     onNotification: publishRemote,
+    onStatus: setChannelStatus,
   });
 }
 
@@ -303,6 +374,13 @@ function closeChannel(): void {
   closeTimer = setTimeout(() => {
     stopStream?.();
     stopStream = null;
+    // Back to the initial value rather than left at whatever it last was. A
+    // torn-down stream that stays `live` is the stale-as-live claim FR-025
+    // exists to prevent, and it is reachable: sign out on a dashboard with a
+    // healthy channel, and without this the status still reads `live` with no
+    // socket behind it. `connecting` is the honest reading of "closed, and the
+    // next thing that happens is an attempt".
+    setChannelStatus(INITIAL_STATUS);
   }, 1000);
 }
 

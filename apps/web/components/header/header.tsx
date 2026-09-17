@@ -13,6 +13,8 @@ import { LogWorkoutButton } from '@components/log-workout-button';
 import { useIsAuthenticated } from '@hooks/use-require-auth';
 import { logout } from '@services/auth';
 
+import { ChannelStatus } from './channel-status';
+
 // No `showLogout` prop any more. It used to be the (auth) layout's way of
 // hiding sign-out, which left the control showing wherever nobody remembered
 // to pass it — notably on "/", which lives in the (main) group and so rendered
@@ -44,6 +46,12 @@ export function Header() {
       <div className="flex items-center gap-4">
         {authenticated && (
           <>
+            {/* Inside the `authenticated` gate with everything else. Not for
+                tidiness: the channel only exists for a signed-in session, so
+                outside it there is no status to report — and `connecting`,
+                which is what the store reads at rest, would be actively wrong
+                on /login. */}
+            <ChannelStatus />
             <LogWorkoutButton />
             <button
               type="button"
