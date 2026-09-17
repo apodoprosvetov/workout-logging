@@ -46,12 +46,10 @@ export interface IngestResult {
 /**
  * Accepts an upload and hands it to the parser.
  *
- * Call order, since this spans three systems and two other files:
- *
  * ```
  * POST /workouts        -> ingest()
  *                          -> storeOrUndo()             [the rollback boundary]
- *                               uploadWorkoutImage()    (GridFS,   shared/db/gridfs.ts)
+ *                               uploadWorkoutImage()    (GridFS)
  *                               rawUploadModel.create() (Mongo)
  *                               manager.transaction():  (Postgres, one commit)
  *                                   save(Workout)
@@ -60,14 +58,12 @@ export interface IngestResult {
  *                          -> notification.publish()    [outside the boundary]
  * ```
  *
- * **Nothing here publishes to RabbitMQ.** Since T058 the request path only
- * writes the event to the `outbox` table; the relay (T059) is what puts it on
- * the exchange, and the parser is downstream of the relay, not of this method.
- * A reader tracing why a workout never parsed should look there, not here.
+ * **Nothing here publishes to RabbitMQ** — the request path only writes the
+ * outbox row; OutboxRelayService puts it on the exchange. A reader tracing why
+ * a workout never parsed should look there.
  *
- * The ordering inside `storeOrUndo` is not arbitrary and must not be
- * rearranged: each step needs the id the previous one produced, and `undo`
- * walks the Mongo half backwards.
+ * The order inside `storeOrUndo` must not be rearranged: each step needs the
+ * previous one's id, and `undo` walks the Mongo half backwards.
  */
 @Injectable()
 export class IngestionService {
@@ -109,35 +105,21 @@ export class IngestionService {
     };
     await this.notification.publish(notification);
 
-    // performedAt is returned, not just stored: when the caller omits it this
-    // is the only way to learn the date the workout actually landed on, and a
-    // client that guessed would be duplicating the `?? new Date()` above.
-    // Note it can still move later — the parser overwrites it with a date
-    // found in the text when performedAtExplicit is false
-    // (apps/worker parser/handler.ts), which is the live-updates problem
-    // (docs/specs-archive/003 FR-013), not something this response can cover.
+    // Returned because when the caller omits it this is the only way to learn
+    // where the workout landed. It can still move later: the parser overwrites
+    // it with a date found in the text when performedAtExplicit is false.
     return { workoutId: workout.id, status: workout.status, performedAt: workout.performedAt };
   }
 
   /**
-   * The four writes, and their undo.
+   * The writes and their undo, so the caller sees "it worked" or "it failed",
+   * never a half-written workout.
    *
-   * A **compensating action, not a saga**: one method drives the whole sequence
-   * and its reversal, with no second participant and no messages between steps.
-   * If it needs a label at all it is orchestration — this project's actual
-   * choreography is `workout.uploaded → parser → workout.parsed → analytics`,
-   * where no single place holds the overall picture.
-   *
-   * What it buys: the caller sees either "it worked" or "it failed", never a
-   * half-written workout.
-   *
-   * The failure that originally motivated it — a publish that vanished, leaving
-   * a `pending` workout no parser would ever pick up, stuck in the in-flight
-   * surface forever against SC-012 — is gone from this path entirely as of
-   * T058, because the publish is. What is left for the compensation is the
-   * genuinely cross-database half: GridFS and `raw_uploads` are written before
-   * a Postgres transaction that can still fail, and no transaction spans both
-   * databases.
+   * A compensating action, not a saga: one method drives the sequence and its
+   * reversal, with no second participant. It survives the outbox because it
+   * covers the cross-database half — GridFS and `raw_uploads` are written
+   * before a Postgres transaction that can still fail, and no transaction
+   * spans both databases.
    */
   private async storeOrUndo(
     input: IngestInput,
@@ -177,25 +159,16 @@ export class IngestionService {
         image_refs: imageRefs,
         ai_response_raw: null,
       });
-      // Two names for one value, and both are needed: `rawUploadRef` is a
-      // `string` the compiler can see, while `rawUploadId` is the outer
-      // `string | null` the compensation reads if a later step throws.
+      // Two names: `rawUploadRef` is a `string` the compiler sees, `rawUploadId`
+      // the outer `string | null` the compensation reads on a later throw.
       const rawUploadRef = rawUpload._id.toString();
       rawUploadId = rawUploadRef;
 
-      // The workout row and its event, committed together or not at all.
+      // The workout row and its event commit together or not at all —
+      // Principle IV made structural: there is no ordering left to get wrong.
       //
-      // This is Constitution Principle IV — "an event that drives work MUST be
-      // published only after the state it describes has committed" — turned
-      // from something the code is careful about into something it cannot get
-      // wrong. Before this, the publish sat after the save with nothing binding
-      // the two; now there is no ordering to get wrong because there is no
-      // second step in the request path at all.
-      //
-      // `this.workoutRepository.manager`, not an injected DataSource: the
-      // repository's own manager is the same connection, and routing the
-      // transaction through it keeps the number of things this service has to
-      // be handed at construction unchanged.
+      // `workoutRepository.manager` rather than an injected DataSource: same
+      // connection, one fewer constructor dependency.
       const workout = await this.workoutRepository.manager.transaction(async (manager) => {
         const saved = await manager.save(
           manager.create(Workout, {
@@ -248,37 +221,25 @@ export class IngestionService {
 
       await this.undo(bucket, imageRefs, rawUploadId);
 
-      // 503, not 500: nothing is wrong with the request, and retrying it is
-      // exactly the right thing for the caller to do — which is only true
-      // because nothing survives a failure. Before the compensation existed, a
-      // retry would have produced a duplicate workout.
+      // 503, not 500: the request is fine and retrying is right — which is only
+      // true because nothing survives a failure.
       throw new ServiceUnavailableException('Could not store the workout. Nothing was saved.');
     }
   }
 
   /**
-   * Reverse the **Mongo** writes, newest first.
+   * Reverse the **Mongo** writes, newest first. Postgres rolls itself back now,
+   * but an outbox spans one database — the GridFS blobs and `raw_uploads` doc
+   * written before the transaction are still this method's job.
    *
-   * Postgres is not its business any more, and that is T058's doing: the
-   * workout row and its outbox event now commit or roll back together, so a
-   * failure on that side leaves nothing behind for anyone to delete. What an
-   * outbox cannot help with is the other database — it spans one — so the
-   * GridFS blobs and the `raw_uploads` doc written before the transaction are
-   * still this method's job. That asymmetry is the whole reason a compensating
-   * action survives into increment 2.
+   * **Never throws.** A failed undo must not replace the original error: the
+   * caller needs "it failed, retrying is safe" far more than it needs to know
+   * which half of the cleanup missed. Each step is independent.
    *
-   * **Never throws.** A failed undo must not replace the original error with
-   * its own: the caller needs to know the ingest failed, and that the retry is
-   * safe, far more than it needs to know which half of the cleanup did not
-   * land. Each step is independent so one failure does not skip the rest.
-   *
-   * **The decision this records** (required by T056): if the compensation
-   * itself fails — Mongo goes away between the write and the rollback — the
-   * orphan is logged and accepted. Nothing retries it today. That is a real,
-   * chosen limit rather than an oversight: the orphan is a blob or a doc that
-   * nothing references and nothing serves, so it costs storage and no
-   * correctness, and the alternative (a durable cleanup queue) is a second
-   * outbox to justify what is already the rarer half of a rare case.
+   * **If the compensation itself fails, the orphan is logged and accepted** —
+   * a chosen limit, not an oversight: it costs storage and no correctness, and
+   * a durable cleanup queue would be a second outbox for the rarer half of a
+   * rare case.
    */
   private async undo(
     bucket: ReturnType<typeof getWorkoutImagesBucket>,
@@ -298,8 +259,6 @@ export class IngestionService {
 
     if (imageRefs.length > 0) {
       try {
-        // Already tolerates a ref that is gone, so a partly-completed undo can
-        // be re-run without special casing.
         await deleteWorkoutImages(bucket, imageRefs);
       } catch (err) {
         this.logger.error(

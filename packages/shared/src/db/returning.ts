@@ -1,33 +1,17 @@
 import type { EntityManager, EntityTarget, ObjectLiteral } from 'typeorm';
 
 /**
- * Turn the raw rows an `UPDATE ... RETURNING` produces into entity-shaped
- * objects.
+ * Turn the raw rows of an `UPDATE ... RETURNING` into entity-shaped objects.
  *
- * `RETURNING` bypasses TypeORM's hydration entirely: `execute()` hands back
- * whatever the driver returned, keyed by **database column name**. With
- * `SnakeNamingStrategy` (db/typeorm.ts) that means `performed_at`, not
- * `performedAt`. Two things that look like they should solve this do not, both
- * checked rather than assumed:
+ * `RETURNING` bypasses TypeORM's hydration: rows come back keyed by **database
+ * column name** (`performed_at`, not `performedAt`). Neither obvious fix works,
+ * both checked: `generatedMaps` stays empty for an UPDATE, and
+ * `manager.create(Entity, row)` expects property names — given column names it
+ * silently returns `{}`, which is truthy, so the failure surfaces much later as
+ * `undefined.toISOString()`.
  *
- * - `UpdateResult.generatedMaps` stays empty for an UPDATE.
- * - `manager.create(Entity, row)` expects *property* names, so given column
- *   names it silently returns `{}` — no error, no warning. That empty object is
- *   still truthy, so an `if (result)` guard passes and the failure only surfaces
- *   later as `undefined.toISOString()`, swallowed by whatever catch is nearest.
- *
- * The mapping comes from TypeORM's own column metadata rather than a
- * snake-to-camel rule. A rule is right until someone writes
- * `@Column({ name: 'performedAtUtc' })`, and then it is wrong in exactly the
- * same silent way. Metadata cannot disagree with the entity, because it *is*
- * the entity.
- *
- * Two shapes, matching the two shapes of `RETURNING`:
- *
- * - `mapReturning(...)` / `mapReturningOne(...)` take the same column list the
- *   statement asked for, and give back exactly those properties — `Pick<E, K>`,
- *   not `Partial<E>`, so a caller needs no guard for fields it knows are there.
- * - `mapReturningAll(...)` is for `RETURNING *`, and gives a whole entity.
+ * Mapping comes from column metadata, not a snake-to-camel rule: a rule breaks
+ * silently the same way the moment someone writes `@Column({ name: ... })`.
  */
 function mapRow<Entity extends ObjectLiteral>(
   manager: EntityManager,
@@ -36,9 +20,8 @@ function mapRow<Entity extends ObjectLiteral>(
 ): Record<string, unknown> {
   const mapped: Record<string, unknown> = {};
   for (const column of manager.connection.getMetadata(target).columns) {
-    // Only columns the statement actually returned — a partial RETURNING must
-    // not invent `undefined` properties a caller could read as "present but
-    // empty".
+    // Only what the statement returned: a partial RETURNING must not invent
+    // `undefined` properties a caller could read as present-but-empty.
     if (column.databaseName in row) {
       mapped[column.propertyName] = row[column.databaseName];
     }
@@ -51,11 +34,8 @@ function asRows(raw: unknown): Record<string, unknown>[] {
 }
 
 /**
- * Map the rows of a `RETURNING [columns]` statement.
- *
- * Pass the *same* list the query asked for — sharing one `as const` array
- * between `.returning()` and this call is what keeps the type honest, and stops
- * the two drifting into disagreement.
+ * Pass the *same* column list the query asked for — sharing one `as const`
+ * array between `.returning()` and this call is what keeps the type honest.
  *
  * @example
  * const COLUMNS = ['userId', 'performedAt'] as const;
@@ -84,13 +64,10 @@ export function mapReturningOne<Entity extends ObjectLiteral, Key extends keyof 
 }
 
 /**
- * Map the rows of a `RETURNING *` statement into whole entities.
- *
- * Separate from the picked form because the guarantee is different: here every
- * column is present, so the result is `Entity` and callers need no per-field
- * checks. Verified at runtime rather than asserted — a row missing columns means
- * the statement was not really `*`, and silently handing back a half-entity
- * typed as a whole one is the failure this module exists to prevent.
+ * `RETURNING *` → whole entities. Separate from the picked form because the
+ * guarantee differs: every column is present, so callers need no per-field
+ * checks. Verified at runtime — handing back a half-entity typed as a whole one
+ * is the failure this module exists to prevent.
  */
 export function mapReturningAll<Entity extends ObjectLiteral>(
   manager: EntityManager,

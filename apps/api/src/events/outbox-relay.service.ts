@@ -8,39 +8,25 @@ import { RabbitMqPublisherService } from './rabbitmq-publisher.service';
 const IDLE_POLL_MS = 1000;
 
 /**
- * How many events one sweep takes.
- *
- * The batch is held under a row lock for as long as it takes to publish, so
- * this is really "how long may one replica hold a slice of the queue". Fifty
- * confirmed publishes is well under a second against a healthy broker, and a
- * smaller number would just mean more sweeps to drain a backlog.
+ * The batch is held under a row lock while it publishes, so this is really "how
+ * long may one replica hold a slice of the queue".
  */
 const BATCH_SIZE = 50;
 
 /**
- * Publishes committed outbox events to RabbitMQ.
- *
- * The second half of the transactional outbox: T058 writes the event to
- * Postgres in the same transaction as the state it describes, and this puts it
- * on the exchange afterwards. Nothing in the request path publishes any more,
- * so **if this service is not running, no workout is ever parsed** — it is not
- * a background nicety, it is the only link between the API and the worker.
- *
- * Call order:
+ * Publishes committed outbox events to RabbitMQ — the second half of the
+ * transactional outbox. Nothing in the request path publishes any more, so
+ * **if this is not running, no workout is ever parsed.**
  *
  * ```
- * onModuleInit -> loop() -> sweep() --(rows?)--> publish + mark -> sweep() again
- *                             |                                      immediately
+ * onModuleInit -> loop() -> sweep() --(rows)--> publish + mark -> sweep() again
  *                             `--(none)--> wait IDLE_POLL_MS -> sweep()
  * onModuleDestroy -> stop the loop, let the sweep in flight finish
  * ```
  *
- * **At-least-once, never at-most-once.** A row is marked published only after
- * the broker acknowledges it (T054's confirm channel), so a crash between the
- * publish and the `UPDATE` re-sends the event on the next sweep. That is the
- * safe direction to fail: consumers already dedupe through
- * `withEventIdempotency` and the `processed_events` table, which spec 001 paid
- * for and this reuses — half the usual cost of an outbox, already on the shelf.
+ * **At-least-once, never at-most-once.** A row is marked only after the broker
+ * acks, so a crash in between re-sends rather than loses — safe because
+ * consumers already dedupe via `withEventIdempotency`.
  */
 @Injectable()
 export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
@@ -66,10 +52,8 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     this.running = false;
     // Wake the loop if it is sleeping, so shutdown does not wait out a poll.
     //
-    // `wake()`, not a bare `clearTimeout`: cancelling the timer only stops the
-    // callback, and the callback is what resolves the sleep — so clearing it
-    // alone leaves the promise pending forever and `await this.loop` below
-    // never returns. Shutdown hung until a test timed out on it.
+    // `wake()`, not `clearTimeout`: the callback is what resolves the sleep, so
+    // cancelling it alone leaves the promise pending and shutdown hangs.
     this.wake?.();
     await this.loop;
   }
@@ -80,20 +64,16 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       try {
         published = await this.sweep();
       } catch (err) {
-        // Never let the loop die. A broker outage, a lost Postgres connection
-        // — all of it is transient from here, and a relay that exited on the
-        // first failure would silently stop the whole pipeline with the API
-        // still reporting healthy.
+        // Never let the loop die: exiting here stops the whole pipeline with
+        // the API still reporting healthy.
         this.logger.error(
           'outbox sweep failed; retrying',
           err instanceof Error ? err.stack : undefined,
         );
       }
 
-      // A full batch means there is probably more waiting, so drain without
-      // pausing; anything less means the queue is empty or nearly so. This is
-      // what keeps latency at roughly one poll interval when idle while still
-      // clearing a backlog at full speed.
+      // A full batch means more is probably waiting — drain without pausing.
+      // Anything less means idle, so hold latency at one poll interval.
       if (published === BATCH_SIZE) continue;
       if (this.running) await this.sleep(IDLE_POLL_MS);
     }
@@ -101,8 +81,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
-      // One exit for both paths — the timer firing and shutdown cutting it
-      // short — so the promise resolves exactly once either way.
+      // One exit for both paths, so the promise resolves exactly once.
       const finish = (): void => {
         if (this.idleTimer) clearTimeout(this.idleTimer);
         this.idleTimer = null;
@@ -114,26 +93,13 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /**
-   * Claim a batch, publish it, mark it sent. Returns how many were published.
-   *
-   * The whole batch is claimed and released inside one transaction, and the
-   * claim is what makes two API replicas cooperate rather than collide.
-   */
+  /** Claim a batch, publish it, mark it sent — all in one transaction. */
   private async sweep(): Promise<number> {
     return this.dataSource.transaction(async (manager) => {
-      // `FOR UPDATE SKIP LOCKED` is the load-bearing clause. Production runs
-      // two API replicas (infra/docker-compose.prod.yml api-1/api-2), so
-      // without it both would select the same rows on the same tick and
-      // publish every event twice — not occasionally, but as the steady state.
-      // `processed_events` would absorb the duplicates, which is why T059's
-      // text calls them harmless, but "harmless" is not a reason to double the
-      // broker's traffic forever. SKIP LOCKED makes each replica take rows the
-      // other has not, so they share the queue instead of racing for it.
-      //
-      // Raw SQL rather than the query builder: `setLock('pessimistic_write')`
-      // plus `skip locked` is expressible, but the resulting call reads far
-      // less like the thing it does than the SQL does.
+      // `SKIP LOCKED` is load-bearing: production runs two API replicas, and
+      // without it both select the same rows on the same tick and publish every
+      // event twice as the steady state. `processed_events` would absorb that,
+      // but absorbing is not a reason to double broker traffic forever.
       const rows = (await manager.query(
         `SELECT event_id, routing_key, payload
            FROM outbox
@@ -149,18 +115,13 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       const sent: string[] = [];
       for (const row of rows) {
         try {
-          // Awaited one at a time, deliberately. The publisher's promise
-          // resolves on the broker's ack (T054), so this is the point where
-          // "published" stops being a hope — and publishing the batch in
-          // parallel would make a partial failure much harder to account for
-          // than the throughput is worth at this volume.
+          // One at a time: the promise resolves on the broker's ack, and a
+          // parallel batch makes a partial failure far harder to account for.
           await this.publisher.publish(row.routing_key, row.payload);
           sent.push(row.event_id);
         } catch (err) {
-          // Stop at the first failure rather than pressing on: whatever broke
-          // the broker for this event will almost certainly break the next,
-          // and ordering by occurred_at means the rows behind it are newer.
-          // Everything already acknowledged is still marked below.
+          // Stop at the first failure: whatever broke the broker will break the
+          // next too, and the rows behind are newer. Acked ones still get marked.
           this.logger.error(
             `outbox publish failed for ${row.event_id}; leaving it and the rest of the batch unpublished`,
             err instanceof Error ? err.stack : undefined,
@@ -170,8 +131,7 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (sent.length > 0) {
-        // Marked only after the ack, so a crash in between re-sends rather
-        // than loses. See the class comment on why that direction is right.
+        // After the ack, so a crash in between re-sends rather than loses.
         await manager.query(
           `UPDATE outbox SET published_at = now() WHERE event_id = ANY($1::uuid[])`,
           [sent],

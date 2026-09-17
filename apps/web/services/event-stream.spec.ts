@@ -13,13 +13,8 @@ vi.mock('./api-client', async (importOriginal) => ({
   apiFetch: vi.fn(),
 }));
 
-// The parser is the one piece of this feature that is pure input/output, and
-// also the easiest to get subtly wrong: a stream arrives in arbitrary chunks,
-// so every boundary case below is something a real socket will eventually do.
-//
-// Written before the implementation (T016 ahead of T015) so the interface is
-// decided by what callers need rather than by what the first draft happened to
-// return.
+// A stream arrives in arbitrary chunks, so every boundary case below is
+// something a real socket will eventually do.
 
 describe('parseFrames', () => {
   describe('framing', () => {
@@ -226,11 +221,8 @@ describe('backoffDelay', () => {
   const ceiling = backoffDelay(1000);
 
   it('reconnects immediately on the first attempt', () => {
-    // The most common reconnect here is not a failure: the access token lives
-    // 15 minutes, the server closes the stream, the client opens a new one.
-    // Charging a delay for that would cost every user a gap every 15 minutes
-    // for no reason. Growth belongs to *repeated* failures, which is why the
-    // caller must reset the counter after a successful connection.
+    // The commonest reconnect is not a failure but the 15-minute token
+    // expiring, and charging it a delay costs every user a gap every 15 min.
     expect(backoffDelay(0)).toBe(0);
   });
 
@@ -264,11 +256,8 @@ describe('backoffDelay', () => {
   });
 
   it('keeps the ceiling inside SC-007’s recovery budget', () => {
-    // SC-007: after an interruption of up to 5 minutes, the screen must show
-    // current data within 10 seconds of connectivity returning. After five
-    // minutes of failures the client is at the ceiling, so the worst case is
-    // waiting a full ceiling *after* the network is already back — the delay
-    // alone can blow the budget. Room is left for the request itself.
+    // SC-007 gives 10s from connectivity returning. At the ceiling the client
+    // waits that delay *after* the network is back, so it alone can blow it.
     expect(ceiling).toBeLessThan(10_000);
     expect(ceiling).toBeGreaterThan(0);
   });
@@ -462,19 +451,12 @@ describe('startEventStream reconnection', () => {
   });
 
   it('stays at the ceiling instead of cycling back to zero', async () => {
-    // Regression: the healthy-connection window used to open *before* the
-    // backoff sleep, so the sleep counted toward the connection's own lifetime.
-    // Once the delay reached the 5s ceiling it satisfied MIN_HEALTHY_CONNECTION_MS
-    // on its own, every failing cycle scored as healthy, and the delays
-    // sawtoothed 0→250→…→5000→0 forever against a backend that was never once
-    // reachable — with `failingSince` cleared each lap, so the give-up below
-    // could never be reached either.
+    // Regression: the healthy window used to include the backoff sleep, so at
+    // the ceiling the sleep alone scored every failing cycle as healthy and the
+    // delays sawtoothed back to zero forever.
     //
-    // Pinned to the top of the jitter band deliberately. Jitter *hides* this
-    // bug: a 3.4s draw does not reach the 5s threshold, so the reset fires only
-    // on a near-maximum draw and a test on real randomness would catch it a few
-    // times in a hundred. At draw 1 the delay is exactly the ceiling, which is
-    // the boundary the comparison gets wrong, and the sawtooth is certain.
+    // Pinned to draw 1 because jitter *hides* it — a 3.4s draw never reaches the
+    // 5s threshold, so real randomness would catch this a few times in a hundred.
     vi.spyOn(Math, 'random').mockReturnValue(1);
 
     const stop = startFailingStream();
@@ -624,11 +606,9 @@ describe('startEventStream reconnection', () => {
     });
 
     it('lets go of the window and document once stopped', async () => {
-      // Behaviourally invisible — `resume` checks `stopped` and would decline
-      // anyway — so nothing else in this suite can see it. What it costs is a
-      // leak: the listeners close over the whole stream, and a store that
-      // opened and tore down a channel per navigation would pin every one of
-      // them to the page for as long as the tab lives.
+      // Behaviourally invisible (`resume` checks `stopped` anyway), so nothing
+      // else here can see it. The cost is a leak: the listeners close over the
+      // stream, and a channel torn down per navigation would pin them all.
       const { stop } = await givenGivenUp();
 
       stop();
@@ -652,11 +632,9 @@ describe('startEventStream reconnection', () => {
   });
 });
 
-// The heartbeat is the only evidence the client has that a channel still
-// works, so these drive a real `ReadableStream` rather than a rejecting stub:
-// the cases that matter — a socket that is open and silent, one cut by an
-// intermediary that never reports it — are indistinguishable from a healthy
-// connection at every level above the bytes.
+// A real `ReadableStream`, not a rejecting stub: the cases that matter — an
+// open silent socket, one cut by an intermediary — are indistinguishable from
+// a healthy connection at every level above the bytes.
 describe('startEventStream liveness', () => {
   const fetchMock = vi.mocked(apiFetch);
   const HEARTBEAT_INTERVAL_MS = 15_000;

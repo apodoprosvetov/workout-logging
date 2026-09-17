@@ -244,18 +244,10 @@ describe('workout-events store', () => {
     });
 
     it('does not let the echo of our own log look like a local change', () => {
-      // The race T020 recorded, now resolved — this is its regression test.
-      //
-      // Once T038 publishes workout.created, every local log is followed
-      // milliseconds later by our own POST coming back over our own channel.
-      // The store used to blank the date on any remote change, so the dashboard
-      // saw the revision move with the date gone and skipped the week switch.
-      //
-      // Nothing is blanked now. The echo overwrites the snapshot and keeps the
-      // date, and what decides whether anyone acts on it is the origin — which
-      // is about the workout, not about the date. The settle below names a
-      // different workout, so it is somebody else's and stays `remote`; the
-      // FR-018 block covers the case where the id does match.
+      // Regression: every local log is echoed back over our own channel
+      // milliseconds later. The store used to blank the date on any remote
+      // change, so the dashboard saw a revision with no date and skipped the
+      // week switch. Now `origin` decides, not the date.
       publishWorkoutLogged('w-echo', '2026-09-07T00:00:00.000Z');
       expect(getSnapshot().origin).toBe('local');
       expect(getSnapshot().performedAt).toBe('2026-09-07T00:00:00.000Z');
@@ -302,13 +294,10 @@ describe('workout-events store', () => {
   });
 
   // contracts/ui.md, "The one permitted navigation". The store answers the
-  // first two conditions — it is the only thing that knows which workouts this
-  // tab created, and it reads the settle's status. The third (a different week)
-  // belongs to the dashboard, which is the only thing that knows what is on
-  // screen, and cannot be reached from here without a DOM.
+  // first two conditions; the third (a different week) belongs to the dashboard.
   //
-  // Ids are unique per test on purpose: the store is a module singleton, so the
-  // set of "logged here" ids carries across the whole file.
+  // Ids are unique per test: the store is a module singleton, so the set of
+  // "logged here" ids carries across the file.
   describe('FR-018: only this session may follow its own workout', () => {
     it('recognises a settle for a workout this tab logged', () => {
       publishWorkoutLogged('w-mine', '2026-09-07T00:00:00.000Z');
@@ -464,14 +453,9 @@ describe('channel status (FR-025, data-model.md)', () => {
     const dataListener = vi.fn();
     const unsubData = subscribe(dataListener);
 
-    // Reaching `live` for the first time is not a recovery: nothing was missed,
-    // and the consumers that just mounted already fetched. This is the whole
-    // reason status is a separate store — if every transition moved `revision`,
-    // a channel that reconnects several times an hour on token expiry would
-    // refetch every mounted list each time it did.
-    //
-    // The one transition that *does* bump is a recovery after a gap, which is
-    // a different claim and has its own block below (FR-023).
+    // A first `live` is not a recovery: nothing was missed. This is why status
+    // is a separate store — bumping `revision` on every transition would refetch
+    // every mounted list on each token-expiry reconnect. A gap does bump, below.
     deliverStatus('live');
 
     expect(getSnapshot().revision).toBe(before);

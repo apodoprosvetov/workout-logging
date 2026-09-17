@@ -31,19 +31,14 @@ import { WorkoutsModule } from '../../src/workouts/workouts.module';
 
 import type { Channel, ChannelModel } from 'amqplib';
 
-// The relay is the only link between the API and the parser since T058, so
-// these run it against real Postgres and a real broker. The loop is stopped in
-// `beforeAll` and every test drives `sweepOnce()` directly: a background timer
-// would make each assertion a race against a 1s poll, and "usually passes" is
-// the one result a test must never give.
+// Real Postgres and a real broker. The loop is stopped and every test drives
+// `sweepOnce()` by hand — a background timer makes each assertion a race
+// against a 1s poll.
 //
-// **The broker-outage tests (T060) live in this file deliberately.** They
-// started as their own spec and made this one fail roughly one run in three:
-// a sweep claims whatever is unpublished, so two spec files driving relays in
-// parallel against one `outbox` table publish each other's rows out from under
-// their assertions. Vitest parallelises files but runs tests within a file in
-// order, so sharing a file is what makes them sequential. Splitting them again
-// reintroduces the flake.
+// **The outage tests live in this file deliberately.** As their own spec they
+// made this one fail one run in three: a sweep claims whatever is unpublished,
+// so two files driving relays in parallel publish each other's rows. Vitest
+// parallelises files but orders tests within one. Splitting them brings it back.
 describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
   let moduleRef: TestingModule;
   let relay: OutboxRelayService;
@@ -102,13 +97,9 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
     spyQueue = declared.queue;
     await amqpChannel.bindQueue(spyQueue, WORKOUT_EVENTS_EXCHANGE, WORKOUT_UPLOADED_ROUTING_KEY);
 
-    // No draining, and no assertions on how many rows a sweep returned.
-    // `outbox` is global by design — the relay publishes whatever is waiting,
-    // including rows another spec file wrote moments ago, and vitest runs spec
-    // files in parallel. Every assertion below is therefore about *this
-    // suite's own* rows, which nothing else touches. An earlier version
-    // asserted sweep counts, passed alone, and failed the moment the full
-    // suite ran.
+    // No assertions on sweep counts: `outbox` is global, so a sweep legitimately
+    // sees other files' rows. Everything below is scoped to this suite's own.
+    // Asserting counts passed alone and failed in the full run.
   });
 
   afterAll(async () => {
@@ -319,16 +310,12 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
     // that records that order once the request that made them is gone.
     expect(order.indexOf(older)).toBeLessThan(order.indexOf(newer));
   });
-  // T060: the guarantee increment 2 buys that T054/T055 could not — a broker
-  // outage stops being the caller's problem. Before the outbox, POST /workouts
-  // published inside the request, so an unreachable broker meant a 503 and a
-  // workout the user had to log again.
+  // A broker outage stops being the caller's problem: before the outbox, an
+  // unreachable broker meant a 503 and a workout the user had to log again.
   //
-  // The outage is real, not mocked: the publisher's AMQP connection is
-  // genuinely closed and later genuinely reopened, so `publish` fails the way
-  // it fails against a dead broker. What this deliberately does *not* do is
-  // `docker compose stop rabbitmq` — sibling spec files need the broker, and
-  // stopping it would fail them for reasons that have nothing to do with them.
+  // The outage is real, not mocked — the AMQP connection is genuinely closed
+  // and reopened. Not `docker compose stop rabbitmq`, which would fail sibling
+  // spec files for reasons unrelated to them.
   describe('a broker outage (T060)', () => {
     let userId: string;
     let outageWorkoutId: string;
@@ -548,15 +535,12 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
       await reconciliation.sweepOnce();
       await relay.sweepOnce();
 
-      // The two halves joined up: the sweep only re-arms, and the relay is what
-      // puts the event back on the exchange. Reading it off a bound queue is
-      // what makes that end-to-end rather than two services each reporting
+      // The sweep only re-arms; the relay publishes. Reading it off a bound
+      // queue is what makes this end-to-end rather than two services reporting
       // success to themselves.
       //
-      // **Not asserted here: the workout reaching a terminal status.** That is
-      // the worker's half — it needs a live parser and an Anthropic call, so it
-      // belongs to quickstart scenario 1 (T049), not to a suite that must be
-      // deterministic.
+      // **Not asserted: the workout reaching a terminal status** — that needs a
+      // live parser and an AI call, so it belongs to quickstart scenario 1.
       expect(await isRearmed(stuck)).toBe(false);
       expect(await waitForEvent('event_id', row.event_id)).toBe(true);
     });

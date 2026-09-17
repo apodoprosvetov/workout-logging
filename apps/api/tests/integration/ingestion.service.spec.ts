@@ -127,15 +127,9 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
     expect(rawUpload?.get('text')).toBe('bench press 80kg x8');
     expect(rawUpload?.get('user_id')).toBe(userId);
 
-    // Since T058 the request path does not publish: the event is written to
-    // the `outbox` table in the same transaction as the workout row, and the
-    // relay (T059) is what puts it on the exchange. Asserting on the queue
-    // here would now be asserting on the relay, which is a different test —
-    // and, until T059 exists, on nothing at all.
-    //
-    // No sleep any more either. The old 300ms was waiting for the broker to
-    // route an asynchronous publish; a committed row needs no such grace, and
-    // the wait was a race the test could only ever lose slowly.
+    // The request path no longer publishes, so asserting on the queue here
+    // would be asserting on the relay — a different test. No sleep either: a
+    // committed row needs no grace period.
     const outboxDs = createTypeOrmDataSource();
     await outboxDs.initialize();
     const rows = (await outboxDs.query(`SELECT * FROM outbox WHERE payload->>'workout_id' = $1`, [
@@ -181,15 +175,11 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
   });
 
   it('rolls the workout row back when the outbox insert fails', async () => {
-    // The claim the previous test cannot make. Counting after a success shows
-    // the two rows appear together; only a forced failure shows they *cannot*
-    // come apart — which is the entire point of the transaction, and the bug a
-    // save-then-insert would reintroduce silently.
+    // Counting after a success shows the rows appear together; only a forced
+    // failure shows they cannot come apart.
     //
-    // Spying on EntityManager's prototype rather than on a manager instance:
-    // the transactional manager is created by TypeORM inside `transaction()`
-    // and never handed to the test, so the prototype is the only seam that
-    // reaches it.
+    // The prototype, not an instance: TypeORM creates the transactional manager
+    // inside `transaction()` and never hands it to the test.
     const before = await countWorkoutsAndOutbox();
     const spy = vi
       .spyOn(EntityManager.prototype, 'insert')
@@ -254,29 +244,18 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
     });
 
     it('still reports 503 when the compensation itself fails, and never masks the error', async () => {
-      // **The decision T056 asks to record, asserted rather than only
-      // commented**: if the cleanup cannot run — Mongo goes away between the
-      // write and the rollback — the orphan is logged and accepted, and the
-      // caller still gets a 503 telling them the retry is safe.
-      //
-      // The alternative would be to surface the cleanup's own error, which
-      // tells the caller nothing they can act on and hides the one thing they
-      // need: that nothing durable was created for them. Nothing retries the
-      // orphan today; it costs storage and no correctness, and a durable
-      // cleanup queue is a second outbox to justify the rarer half of a rare
-      // case.
+      // The recorded decision, asserted rather than only commented: if the
+      // cleanup cannot run, the orphan is logged and accepted and the caller
+      // still gets a 503 saying the retry is safe. Surfacing the cleanup's own
+      // error would hide the one thing they can act on.
       const insertSpy = vi
         .spyOn(EntityManager.prototype, 'insert')
         .mockRejectedValue(new Error('outbox insert failed'));
-      // Break the undo as well, with a distinctive error: if this one ever
-      // reaches the caller, the compensation is rethrowing and the test fails
-      // on the message rather than passing quietly.
+      // A distinctive error: if it reaches the caller, the compensation is
+      // rethrowing and this fails on the message rather than passing quietly.
       //
-      // The Mongo model, not `EntityManager.delete`. An earlier version of this
-      // test mocked the latter and passed vacuously: T058 moved the workouts
-      // row into the transaction, so `undo` no longer deletes anything through
-      // TypeORM and that spy broke nothing at all. A mutation check caught it —
-      // rethrowing from the real compensation left the suite green.
+      // The Mongo model, not `EntityManager.delete` — `undo` no longer deletes
+      // through TypeORM, so that spy broke nothing and the test passed vacuously.
       const deleteSpy = vi
         .spyOn(rawUploadModel, 'deleteOne')
         .mockRejectedValue(new Error('compensation itself failed')) as unknown as {

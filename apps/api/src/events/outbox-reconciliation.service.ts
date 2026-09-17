@@ -5,43 +5,23 @@ import { DataSource } from 'typeorm';
 import { WORKOUT_UPLOADED_ROUTING_KEY } from '@workout-logging/shared';
 
 /**
- * How long a workout may sit `pending` before the sweep assumes its event was lost.
+ * How long a workout may sit `pending` before its event is assumed lost.
  *
- * Derived from measured behaviour, not picked for roundness. Against the live
- * database (n=41 processed events) the time from an event being created to the
- * worker finishing it was p50 6.3s, p95 23.0s, max 23.4s. But the happy path is
- * not the bound — a workout that keeps failing retries legitimately stays
- * `pending` for far longer:
+ * Measured, not rounded. Parse latency against the live database (n=41) was p50
+ * 6.3s / p95 23.0s, but the bound is a workout failing retries: the ladder
+ * (5s + 30s + 300s) plus four attempts at the p95 ≈ **428s**.
  *
- * ```
- *   retry ladder (shared/events/rabbitmq.ts)   5s + 30s + 300s = 335s
- *   four parse attempts at the p95 of 23s                      ≈  92s
- *   relay poll                                                 ≤   1s
- *                                                               ------
- *   worst legitimate pending lifetime                          ≈ 428s  (7.1 min)
- * ```
- *
- * 15 minutes is a little over twice that. The headroom is the point: re-arming
- * a workout that is merely *slow* means the parser runs again, and a second
- * parse costs an Anthropic call and writes a second set of exercises (the
- * worker's status update is guarded, but its exercise inserts are not). So the
- * threshold is deliberately far past anything a healthy system produces —
- * whatever it catches is genuinely stuck, not just late.
+ * 15 min is twice that, and the headroom is the point: re-arming a merely slow
+ * workout parses it again, costing an AI call and a **second set of exercises**
+ * — the worker's status update is guarded, its exercise inserts are not.
  */
 const STUCK_AFTER_MS = 15 * 60_000;
 
 /**
- * How old is too old to keep retrying.
- *
- * Without an upper bound this sweep would re-publish a permanently broken
- * workout every 15 minutes forever, burning an AI call each time. The worker
- * marks a workout `failed` once retries are exhausted, so anything still
- * `pending` a day later did not fail in a way the pipeline understands — it
- * needs a person, not another attempt.
- *
- * Choosing a bound rather than a re-publish counter is what keeps this
- * migration-free: the alternative is a column on `workouts` or `outbox` whose
- * only reader is this service.
+ * Upper bound, or a permanently broken workout is re-published every 15 minutes
+ * forever. The worker marks exhausted retries `failed`, so anything still
+ * `pending` a day later needs a person. A bound rather than a re-publish
+ * counter keeps this migration-free.
  */
 const GIVE_UP_AFTER_MS = 24 * 60 * 60_000;
 
@@ -49,18 +29,14 @@ const GIVE_UP_AFTER_MS = 24 * 60 * 60_000;
 const SWEEP_INTERVAL_MS = 60_000;
 
 /**
- * Re-publishes the events of workouts that got stuck `pending`.
+ * Re-publishes the events of workouts stuck `pending` — the net under the other
+ * two increments.
  *
- * The net under the other two increments. T054's confirms and T055's
- * compensation close the window where a publish is lost inside a request;
- * T058's outbox closes the window between committing state and queueing its
- * event. What none of them cover is an event that was published, acknowledged,
- * and then lost downstream — a broker that dropped it, a worker that died
- * holding it, a queue that was purged. To a user, all of those look the same:
- * a workout that never leaves the in-flight surface (SC-012).
- *
- * **It re-publishes by re-arming the existing outbox row**, setting
- * `published_at` back to NULL so the relay picks it up again:
+ * Confirms and compensation close the window where a publish is lost inside a
+ * request; the outbox closes the one between committing state and queueing its
+ * event. Neither covers an event published, acked, then lost downstream. To a
+ * user all three look the same: a workout that never leaves the in-flight
+ * surface (SC-012).
  *
  * ```
  * onModuleInit -> loop() -> sweep()
@@ -69,21 +45,15 @@ const SWEEP_INTERVAL_MS = 60_000;
  *                           -> OutboxRelayService publishes it within ~1s
  * ```
  *
- * Two things fall out of that choice, and both matter more than they look:
+ * **Re-arming the existing row keeps the `event_id`, and that is what makes a
+ * duplicate harmless.** `withEventIdempotency` inserts into `processed_events`
+ * in the same transaction as the parse, so an id present there means the parse
+ * committed — and a committed parse leaves the workout non-pending. A still-
+ * pending workout's id was therefore never processed; and if the original
+ * message is still in flight, the first transaction to commit wins. A fresh id
+ * would bypass all of that and parse the workout twice.
  *
- * **The `event_id` stays the same**, which is what makes a duplicate harmless
- * here. `withEventIdempotency` inserts into `processed_events` in the *same
- * transaction* as the parse, so an id present there means the work committed —
- * and a committed parse leaves the workout non-pending. A workout that is still
- * pending therefore has an id that was never processed, so re-publishing it
- * will be processed; and if the original message turns out to still be in
- * flight, whichever transaction commits first wins and the other is skipped.
- * A *fresh* id would bypass that machinery entirely and parse the workout
- * twice, writing a second set of exercises. That is the bug this design avoids
- * rather than mitigates.
- *
- * **No publisher, no broker connection, no confirms here.** Delivery is
- * entirely the relay's problem, already solved once.
+ * No publisher and no broker connection here — delivery is the relay's job.
  */
 @Injectable()
 export class OutboxReconciliationService implements OnModuleInit, OnModuleDestroy {
@@ -108,18 +78,15 @@ export class OutboxReconciliationService implements OnModuleInit, OnModuleDestro
 
   private async run(): Promise<void> {
     while (this.running) {
-      // The first sweep waits a full interval rather than running at boot. A
-      // process that crash-loops would otherwise re-arm on every restart, and
-      // anything genuinely stuck has already waited fifteen minutes — one more
-      // is not the difference.
+      // Waits before the first sweep: a crash-looping process would otherwise
+      // re-arm on every restart, and anything stuck has already waited 15 min.
       await this.sleep(SWEEP_INTERVAL_MS);
       if (!this.running) return;
 
       try {
         await this.sweep();
       } catch (err) {
-        // Same reasoning as the relay: this loop must not die. It is the last
-        // line of defence, and a silent exit would leave nothing watching.
+        // Must not die: this is the last line of defence.
         this.logger.error(
           'reconciliation sweep failed; retrying',
           err instanceof Error ? err.stack : undefined,
@@ -141,24 +108,18 @@ export class OutboxReconciliationService implements OnModuleInit, OnModuleDestro
     });
   }
 
-  /**
-   * Re-arm every stuck workout's event. Returns how many were re-armed.
-   *
-   * Exists as a method the tests can await; nothing else calls it directly.
-   */
+  /** A sweep the tests can await; nothing else calls it. */
   async sweepOnce(): Promise<number> {
     return this.sweep();
   }
 
   private async sweep(): Promise<number> {
-    // One statement, which is what makes two API replicas safe without a lock
-    // clause. Under READ COMMITTED the second replica's UPDATE re-evaluates its
-    // predicate after the first commits, sees `published_at IS NULL`, and
-    // matches nothing — so a row is re-armed once, not once per replica.
+    // One statement, which is what makes two replicas safe with no lock clause:
+    // under READ COMMITTED the second UPDATE re-evaluates after the first
+    // commits, sees `published_at IS NULL` and matches nothing.
     //
-    // `published_at IS NOT NULL` is therefore doing two jobs: it skips rows the
-    // relay has not delivered yet (those are not stuck, just queued) and it
-    // makes the statement idempotent between replicas.
+    // So `published_at IS NOT NULL` does two jobs — skip rows the relay simply
+    // has not reached yet, and make this idempotent between replicas.
     const rows = (await this.dataSource.query(
       `UPDATE outbox
           SET published_at = NULL
@@ -177,9 +138,8 @@ export class OutboxReconciliationService implements OnModuleInit, OnModuleDestro
     )) as Array<{ event_id: string; workout_id: string }>;
 
     if (rows.length > 0) {
-      // Logged per workout, not just counted: this fires only when something
-      // has already gone wrong, and the id is what makes the incident
-      // traceable afterwards (FR-029).
+      // Per workout, not just counted: this fires only when something already
+      // went wrong, and the id is what makes it traceable (FR-029).
       for (const row of rows) {
         this.logger.warn(
           `re-publishing workout.uploaded for stuck workout ${row.workout_id} (event ${row.event_id})`,

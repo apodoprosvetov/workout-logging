@@ -87,41 +87,28 @@ export async function login(credentials: Credentials): Promise<AuthResult> {
 }
 
 /**
- * Discard the stored session.
- *
- * No request: refresh tokens rotate on use and the server has no
- * revoke-on-logout endpoint, so signing out is purely local. Here rather than
- * inline in the header so there is one place to change when the token store
- * grows change notification (docs/specs-archive/003 T044).
+ * Discard the stored session. No request — refresh tokens rotate on use and the
+ * server has no revoke endpoint, so signing out is purely local.
  */
 export function logout(): void {
   clearTokens();
 }
 
 /**
- * Whether a session is stored right now.
+ * Whether a session is stored right now — read synchronously wherever a
+ * redirect is decided. A subscribed value serves its server snapshot for one
+ * tick after hydration and would bounce a refresh through /login.
  *
- * Read this synchronously wherever a redirect decision is made — it reflects
- * storage at the moment of the call, unlike a subscribed value, which serves
- * its server snapshot for one tick after hydration and would bounce a page
- * refresh through /login.
- *
- * Says nothing about whether the token is still *accepted*: an expired token
- * is discovered on the next request, where apiFetch tries to refresh it.
+ * Says nothing about the token still being accepted; apiFetch finds that out.
  */
 export function hasSession(): boolean {
   return loadTokens() !== null;
 }
 
 /**
- * Subscribe to session changes, for `useSyncExternalStore`.
- *
- * Fires on this tab's sign-in and sign-out, on another tab's (via the
- * `storage` event), and when a failed token refresh ends the session
- * mid-request — that last one is what turns an expired session into a
- * redirect instead of a retry button that can only keep failing.
- *
- * Re-exported unchanged so callers depend on the session module rather than
- * the transport underneath it; it must stay a stable reference.
+ * Session changes, for `useSyncExternalStore`: this tab's sign-in/out, another
+ * tab's via `storage`, and a failed refresh ending the session mid-request —
+ * the last is what turns an expired session into a redirect rather than a retry
+ * button that can only keep failing.
  */
 export { subscribeToSession };

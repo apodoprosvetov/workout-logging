@@ -1,40 +1,25 @@
-// HTTP operations against apps/api's /workouts routes.
+// HTTP operations against /workouts. The IO half; `@lib/contracts/workouts`
+// holds the types (plan.md: services/ for IO, lib/ for pure helpers).
 //
-// Distinct from lib/contracts/workouts.ts, which holds the contract *types* —
-// this is the IO half (plan.md: services/ for IO clients, lib/ for pure helpers
-// and types). At the import site the alias keeps them apart:
-// `@services/workouts` calls the API, `@lib/contracts/workouts` describes its shapes.
+// Conventions for new functions here, so callers can predict one unread:
+//   1. One async function per API operation, named for it.
+//   2. Plain arguments — building the query string is this module's job.
+//   3. Resolves with the parsed body, or void.
+//   4. Throws ApiError; callers never inspect status codes.
+//   5. A non-2xx treated as success is documented on that function, with why.
 //
-// Extension contract — follow it when adding listWorkouts, getWorkout,
-// createWorkout and the rest, so callers can predict a new function without
-// reading it:
-//
-//   1. One exported async function per API operation, named for the operation.
-//   2. Plain arguments in — never a Response, a Headers or a URLSearchParams.
-//      Building the query string is this module's job, not the caller's.
-//   3. Resolves with the parsed body, or void when the endpoint returns none.
-//   4. Throws ApiError (from ./api-client) on anything the caller must handle.
-//      Callers never inspect status codes; that knowledge stays here.
-//   5. Any non-2xx status deliberately treated as success is documented on the
-//      function that does it, with the reason.
-//
-// Auth, token refresh and retry are already handled underneath by apiFetch —
-// nothing here should touch tokens.
+// apiFetch already handles auth, refresh and retry — nothing here touches tokens.
 
 import { ApiError, apiFetch, apiJson } from './api-client';
 
 import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/contracts/workouts';
 
 /**
- * Query for {@link listWorkouts}, mirroring `GET /workouts` in contracts/api.md.
+ * Mirrors `GET /workouts` (contracts/api.md). Omitting `page`/`per_page` means
+ * page 1 at the API's default of 20.
  *
- * `page`/`per_page` are the pagination; every list endpoint takes the same two
- * and answers in the same envelope. Omitting them means page 1 at the API's
- * default page size of 20.
- *
- * `before` (exclusive) and `after` (inclusive) are *filters*, not pagination:
- * they bound `performed_at` as a half-open `[after, before)` window — pass both
- * to fetch a single week.
+ * `before`/`after` are filters, not pagination: a half-open `[after, before)`
+ * window over `performed_at` — pass both for one week.
  */
 export interface ListWorkoutsQuery {
   status?: WorkoutStatus[];
@@ -47,12 +32,9 @@ export interface ListWorkoutsQuery {
 }
 
 /**
- * GET /workouts — the caller's page or window of workouts, newest first.
- *
- * Deliberately not clever: it does not know about page sizes, cursors or
- * over-fetching. Those are policies of whoever is paginating, and they differ
- * between the history list and the dashboard's week view. This function's whole
- * job is turning a typed query into a request.
+ * GET /workouts — a page or window, newest first. Knows nothing about page
+ * sizes or over-fetching: those policies differ between the history list and
+ * the dashboard's week view, and belong to the caller.
  */
 export async function listWorkouts(query: ListWorkoutsQuery = {}): Promise<WorkoutListResponse> {
   const params = new URLSearchParams();
@@ -75,37 +57,24 @@ export interface CreatedWorkout {
   workout_id: string;
   status: WorkoutStatus;
   /**
-   * The date the workout was stored under: the one supplied, or the one the
-   * server chose when none was. Read it rather than recomputing — the default
-   * is the server's to decide (contracts/api.md).
-   *
-   * It can still move: when no date was supplied, the parser may later replace
-   * it with one found in the text. This is where the workout landed now.
+   * Where the workout landed: the supplied date, or the server's default — read
+   * it rather than recomputing, that default is the server's to decide. It can
+   * still move later if the parser finds a date in the text.
    */
   performed_at: string;
 }
 
-/**
- * POST /workouts — hand raw text and/or images to the parsing pipeline.
- *
- * Takes the already-built FormData because the file inputs live in the form;
- * multipart is the endpoint's contract (@fastify/multipart), so there is no
- * JSON shape to accept instead.
- */
+/** POST /workouts. FormData because multipart is the endpoint's contract. */
 export async function createWorkout(body: FormData): Promise<CreatedWorkout> {
   return apiJson<CreatedWorkout>('/workouts', { method: 'POST', body });
 }
 
 /**
- * GET /workouts/:id — one workout with its exercises and sets, or `null` when
- * there is no such workout to show.
+ * GET /workouts/:id, or `null` when there is nothing to show.
  *
- * Null rather than a thrown 404, so callers never touch status codes (rule 4
- * above). "Not found" is an ordinary outcome this screen renders, not a
- * failure: the endpoint answers 404 both for an id that does not exist and for
- * another user's workout (contracts/api.md — never confirm the existence of
- * someone else's data), and the caller can act on neither differently. Every
- * other non-2xx still throws ApiError.
+ * Null rather than a thrown 404 (rule 4): the endpoint answers 404 both for a
+ * missing id and for another user's workout — never confirming someone else's
+ * data — and the caller cannot act on the two differently.
  */
 export async function getWorkout(id: string): Promise<WorkoutDetail | null> {
   try {
@@ -117,13 +86,8 @@ export async function getWorkout(id: string): Promise<WorkoutDetail | null> {
 }
 
 /**
- * DELETE /workouts/:id — resolves once the workout is gone.
- *
- * 404 counts as success. The endpoint answers 404 both for a workout that never
- * existed and for one belonging to another user (contracts/api.md: never
- * confirm the existence of someone else's data), and in either case the
- * caller's goal — "this row should not be there" — already holds. Reporting it
- * as a failure would make a double-click look like an error.
+ * DELETE /workouts/:id. **404 counts as success** — the caller's goal already
+ * holds either way, and failing would make a double-click look like an error.
  */
 export async function deleteWorkout(id: string): Promise<void> {
   const response = await apiFetch(`/workouts/${id}`, { method: 'DELETE' });
