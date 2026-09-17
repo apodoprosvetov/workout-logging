@@ -1,16 +1,20 @@
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { ConfigModule } from '@nestjs/config';
-import { MongooseModule } from '@nestjs/mongoose';
+import { getModelToken, MongooseModule } from '@nestjs/mongoose';
 import { TestingModule, Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Model } from 'mongoose';
 import { EntityManager } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   createMongooseConnection,
   createTypeOrmDataSource,
+  getWorkoutImagesBucket,
+  RawUploadDocument,
   mongoUri,
   typeOrmDataSourceOptions,
   User,
@@ -30,6 +34,7 @@ import { WorkoutsModule } from '../../src/workouts/workouts.module';
 describe('IngestionService (integration, real Postgres + MongoDB)', () => {
   let moduleRef: TestingModule;
   let service: IngestionService;
+  let rawUploadModel: Model<RawUploadDocument>;
   let userId: string;
 
   beforeAll(async () => {
@@ -45,6 +50,9 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
     // RabbitMqPublisherService opens its channel) only run after .init().
     await moduleRef.init();
     service = moduleRef.get(IngestionService);
+    rawUploadModel = moduleRef.get<Model<RawUploadDocument>>(getModelToken('RawUpload'), {
+      strict: false,
+    });
 
     // Stop the relay before any test runs. WorkoutsModule imports EventsModule,
     // so T059's relay starts with this graph and would publish the very rows
@@ -198,6 +206,116 @@ describe('IngestionService (integration, real Postgres + MongoDB)', () => {
     const after = await countWorkoutsAndOutbox();
     expect(after).toEqual(before);
   });
+
+  // T056. The task's original framing — "with the publish forced to fail" —
+  // describes a branch that no longer exists: T058 took the publish out of the
+  // request path, exactly as tasks.md predicted it would. What survives, and is
+  // what these cover, is the half an outbox cannot reach: GridFS and
+  // `raw_uploads` are written to MongoDB *before* a Postgres transaction that
+  // can still fail, and no transaction spans both databases.
+  describe('compensation after a failed ingest (T056)', () => {
+    it('leaves no workout row, no raw_uploads doc and no GridFS blob behind', async () => {
+      const before = await countScoped();
+      const startedAt = new Date();
+
+      // A payload unique to this run. GridFS files carry no user id, so a
+      // bucket-wide count is not ours to assert on — sibling spec files upload
+      // images concurrently, and a global before/after comparison failed two
+      // full runs in three for reasons that had nothing to do with this code.
+      // Length plus upload time is narrow enough to name our own blob.
+      const marker = Buffer.from(`compensation-probe-${randomUUID()}`);
+
+      const spy = vi
+        .spyOn(EntityManager.prototype, 'insert')
+        .mockRejectedValue(new Error('outbox insert failed'));
+
+      try {
+        await expect(
+          service.ingest({
+            userId,
+            text: 'clean and jerk 70kg x3',
+            // An image, deliberately: without one the GridFS half of the
+            // compensation is never exercised, and it is the half with no
+            // transaction behind it.
+            imageBuffers: [marker],
+            source: WorkoutSource.WEB,
+          }),
+        ).rejects.toMatchObject({ status: 503 });
+      } finally {
+        spy.mockRestore();
+      }
+
+      // The Postgres and Mongo rows are scoped by user id; the blob is scoped
+      // by its own size and upload window. A blob nothing references is
+      // invisible to every screen and every query, which is precisely why it
+      // would go unnoticed without an assertion here.
+      expect(await countScoped()).toEqual(before);
+      expect(await ourBlobsSince(startedAt, marker.length)).toBe(0);
+    });
+
+    it('still reports 503 when the compensation itself fails, and never masks the error', async () => {
+      // **The decision T056 asks to record, asserted rather than only
+      // commented**: if the cleanup cannot run — Mongo goes away between the
+      // write and the rollback — the orphan is logged and accepted, and the
+      // caller still gets a 503 telling them the retry is safe.
+      //
+      // The alternative would be to surface the cleanup's own error, which
+      // tells the caller nothing they can act on and hides the one thing they
+      // need: that nothing durable was created for them. Nothing retries the
+      // orphan today; it costs storage and no correctness, and a durable
+      // cleanup queue is a second outbox to justify the rarer half of a rare
+      // case.
+      const insertSpy = vi
+        .spyOn(EntityManager.prototype, 'insert')
+        .mockRejectedValue(new Error('outbox insert failed'));
+      // Break the undo as well, with a distinctive error: if this one ever
+      // reaches the caller, the compensation is rethrowing and the test fails
+      // on the message rather than passing quietly.
+      //
+      // The Mongo model, not `EntityManager.delete`. An earlier version of this
+      // test mocked the latter and passed vacuously: T058 moved the workouts
+      // row into the transaction, so `undo` no longer deletes anything through
+      // TypeORM and that spy broke nothing at all. A mutation check caught it —
+      // rethrowing from the real compensation left the suite green.
+      const deleteSpy = vi
+        .spyOn(rawUploadModel, 'deleteOne')
+        .mockRejectedValue(new Error('compensation itself failed')) as unknown as {
+        mockRestore: () => void;
+      };
+
+      try {
+        await expect(
+          service.ingest({ userId, text: 'row 60kg x10', source: WorkoutSource.WEB }),
+        ).rejects.toMatchObject({ status: 503 });
+      } finally {
+        insertSpy.mockRestore();
+        deleteSpy.mockRestore();
+      }
+    });
+  });
+
+  /** Everything this user owns across the three stores. */
+  async function countScoped(): Promise<{
+    workouts: number;
+    outbox: number;
+    rawUploads: number;
+  }> {
+    const counts = await countWorkoutsAndOutbox();
+    const mongo = await createMongooseConnection();
+    const rawUploads = await mongo.model('RawUpload').countDocuments({ user_id: userId });
+    await mongo.close();
+    return { ...counts, rawUploads };
+  }
+
+  /** Blobs of exactly this size uploaded since `since` — i.e. ours, and only ours. */
+  async function ourBlobsSince(since: Date, length: number): Promise<number> {
+    const mongo = await createMongooseConnection();
+    const found = await getWorkoutImagesBucket(mongo)
+      .find({ length, uploadDate: { $gte: since } })
+      .toArray();
+    await mongo.close();
+    return found.length;
+  }
 
   async function countWorkoutsAndOutbox(): Promise<{ workouts: number; outbox: number }> {
     const ds = createTypeOrmDataSource();

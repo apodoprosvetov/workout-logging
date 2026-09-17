@@ -23,6 +23,7 @@ import {
   WORKOUT_UPLOADED_ROUTING_KEY,
 } from '@workout-logging/shared';
 
+import { OutboxReconciliationService } from '../../src/events/outbox-reconciliation.service';
 import { OutboxRelayService } from '../../src/events/outbox-relay.service';
 import { RabbitMqPublisherService } from '../../src/events/rabbitmq-publisher.service';
 import { IngestionService } from '../../src/workouts/ingestion.service';
@@ -47,10 +48,13 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
   let moduleRef: TestingModule;
   let relay: OutboxRelayService;
   let publisher: RabbitMqPublisherService;
+  let reconciliation: OutboxReconciliationService;
   let ingestion: IngestionService;
   let ds: DataSource;
   let amqpConnection: ChannelModel;
   let amqpChannel: Channel;
+  /** Our own copy of the exchange's traffic, immune to the dev worker. */
+  let spyQueue: string;
   /** Rows this suite created, so cleanup never touches anything else. */
   const created: string[] = [];
 
@@ -77,6 +81,10 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
     relay = moduleRef.get(OutboxRelayService, { strict: false });
     await relay.onModuleDestroy();
     publisher = moduleRef.get(RabbitMqPublisherService, { strict: false });
+    // Driven by hand for the same reason as the relay: a background sweep would
+    // re-arm rows between the assertions below.
+    reconciliation = moduleRef.get(OutboxReconciliationService, { strict: false });
+    await reconciliation.onModuleDestroy();
     ingestion = moduleRef.get(IngestionService, { strict: false });
 
     ds = await createTypeOrmDataSource().initialize();
@@ -84,6 +92,15 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
     amqpChannel = await amqpConnection.createChannel();
 
     await assertNoCompetingRelay();
+
+    // One queue of our own, bound to the exchange, shared by every block below.
+    //
+    // Never `workout.parse.q`: a running dev worker drains the real queue and
+    // would win the race. Exclusive + autoDelete so a failed run leaves nothing
+    // accumulating on the broker.
+    const declared = await amqpChannel.assertQueue('', { exclusive: true, autoDelete: true });
+    spyQueue = declared.queue;
+    await amqpChannel.bindQueue(spyQueue, WORKOUT_EVENTS_EXCHANGE, WORKOUT_UPLOADED_ROUTING_KEY);
 
     // No draining, and no assertions on how many rows a sweep returned.
     // `outbox` is global by design — the relay publishes whatever is waiting,
@@ -156,6 +173,32 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
     } finally {
       await ds.query(`DELETE FROM outbox WHERE event_id = $1`, [probeId]);
     }
+  }
+
+  /**
+   * Reads the bound queue until an event matching `field`/`value` arrives.
+   *
+   * Matching on a field rather than taking the next message: the queue carries
+   * every `workout.uploaded` on the exchange, including those from sibling
+   * blocks and from a dev API if one is up, so "the next message" is not
+   * necessarily ours.
+   */
+  async function waitForEvent(
+    field: 'workout_id' | 'event_id',
+    value: string,
+    timeoutMs = 5000,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const msg = await amqpChannel.get(spyQueue, { noAck: true });
+      if (msg) {
+        const event = JSON.parse(msg.content.toString()) as Record<string, unknown>;
+        if (event[field] === value) return true;
+        continue;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
   }
 
   /** Writes an unpublished outbox row and returns its event id. */
@@ -289,8 +332,6 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
   describe('a broker outage (T060)', () => {
     let userId: string;
     let outageWorkoutId: string;
-    /** Our own copy of the exchange's traffic, immune to the dev worker. */
-    let spyQueue: string;
 
     beforeAll(async () => {
       const user = await ds
@@ -301,15 +342,6 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
             .create({ email: `outbox-outage-${Date.now()}@example.com`, passwordHash: 'x' }),
         );
       userId = user.id;
-
-      // A temporary exclusive queue bound to the same routing key, rather than
-      // reading `workout.parse.q`: a running dev worker drains the real queue
-      // and would win the race. This is the "bind your own queue" answer the
-      // stop-the-worker note recorded for exactly this case. Exclusive +
-      // autoDelete, so a failed run leaves nothing behind on the broker.
-      const declared = await amqpChannel.assertQueue('', { exclusive: true, autoDelete: true });
-      spyQueue = declared.queue;
-      await amqpChannel.bindQueue(spyQueue, WORKOUT_EVENTS_EXCHANGE, WORKOUT_UPLOADED_ROUTING_KEY);
     });
 
     afterAll(async () => {
@@ -320,21 +352,6 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
       await mongo.model('RawUpload').deleteMany({ user_id: userId });
       await mongo.close();
     });
-
-    /** Reads the bound queue until the named event shows up, or gives up. */
-    async function waitForEvent(workoutId: string, timeoutMs = 5000): Promise<boolean> {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        const msg = await amqpChannel.get(spyQueue, { noAck: true });
-        if (msg) {
-          const event = JSON.parse(msg.content.toString()) as { workout_id?: string };
-          if (event.workout_id === workoutId) return true;
-          continue;
-        }
-        await new Promise((r) => setTimeout(r, 50));
-      }
-      return false;
-    }
 
     it('accepts a workout while the broker is unreachable, and queues the event', async () => {
       // A real disconnect: any publish from here fails exactly as it would
@@ -389,7 +406,159 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
       // Stamped is not delivered — the row could say published while the
       // exchange routed it nowhere. Reading it back off a bound queue is what
       // makes this end-to-end rather than self-reported.
-      expect(await waitForEvent(outageWorkoutId)).toBe(true);
+      expect(await waitForEvent('workout_id', outageWorkoutId)).toBe(true);
+    });
+  });
+  // T062: the reconciliation sweep (T061), the net under the other two
+  // increments. It lives in this file for the same reason the outage tests do —
+  // it rewrites `published_at` on rows the relay tests assert on, and vitest
+  // parallelises files but orders tests within one.
+  describe('the reconciliation sweep (T062)', () => {
+    let sweepUserId: string;
+
+    beforeAll(async () => {
+      const user = await ds
+        .getRepository(User)
+        .save(
+          ds
+            .getRepository(User)
+            .create({ email: `outbox-sweep-${Date.now()}@example.com`, passwordHash: 'x' }),
+        );
+      sweepUserId = user.id;
+    });
+
+    afterAll(async () => {
+      await ds.query(`DELETE FROM outbox WHERE payload->>'user_id' = $1`, [sweepUserId]);
+      await ds.query('DELETE FROM workouts WHERE user_id = $1', [sweepUserId]);
+      await ds.query('DELETE FROM users WHERE id = $1', [sweepUserId]);
+    });
+
+    /**
+     * A pending workout of a given age, with its event already published.
+     *
+     * Written straight to SQL rather than through `IngestionService`: the point
+     * is a workout that is *old*, and the service always stamps `created_at`
+     * as now. Backdating the row is the only way to reach the threshold without
+     * a fifteen-minute test.
+     */
+    async function agedWorkout(ageMs: number, status = 'pending'): Promise<string> {
+      const workoutId = randomUUID();
+      const eventId = randomUUID();
+      await ds.query(
+        `INSERT INTO workouts (id, user_id, source, has_text, has_image, raw_input_ref,
+                               status, performed_at, created_at, performed_at_explicit)
+         VALUES ($1,$2,'web',true,false,'x',$3::workouts_status_enum, now(),
+                 now() - ($4::bigint * interval '1 millisecond'), false)`,
+        [workoutId, sweepUserId, status, ageMs],
+      );
+      await ds.query(
+        `INSERT INTO outbox (event_id, routing_key, payload, occurred_at, published_at)
+         VALUES ($1,$2,$3,now(),now())`,
+        [
+          eventId,
+          WORKOUT_UPLOADED_ROUTING_KEY,
+          JSON.stringify({ event_id: eventId, user_id: sweepUserId, workout_id: workoutId }),
+        ],
+      );
+      return workoutId;
+    }
+
+    async function isRearmed(workoutId: string): Promise<boolean> {
+      const rows = (await ds.query(
+        `SELECT published_at FROM outbox WHERE payload->>'workout_id' = $1`,
+        [workoutId],
+      )) as Array<{ published_at: Date | null }>;
+      return rows[0].published_at === null;
+    }
+
+    it('re-publishes a workout stuck past the threshold', async () => {
+      const stuck = await agedWorkout(20 * 60_000);
+
+      await reconciliation.sweepOnce();
+
+      // Re-arming the existing row rather than inserting a new event is what
+      // keeps the `event_id` stable, which is what makes a duplicate harmless
+      // (see the service comment). So "re-published" is observable as the row
+      // going back to unpublished, ready for the relay.
+      expect(await isRearmed(stuck)).toBe(true);
+    });
+
+    it('leaves a workout inside the threshold alone', async () => {
+      // Two minutes old: well inside the worst legitimate pending lifetime of
+      // ~7 minutes (retry ladder plus four parse attempts). Re-publishing this
+      // one would parse a workout that is merely slow, and the parser has no
+      // early return for an already-settled workout — a second parse writes a
+      // second set of exercises.
+      const fresh = await agedWorkout(2 * 60_000);
+
+      await reconciliation.sweepOnce();
+
+      expect(await isRearmed(fresh)).toBe(false);
+    });
+
+    it('gives up on a workout older than a day', async () => {
+      // The upper bound. Without it this sweep would re-publish a permanently
+      // broken workout every fifteen minutes forever, burning an AI call each
+      // time. Anything still pending a day later needs a person.
+      const ancient = await agedWorkout(30 * 60 * 60_000);
+
+      await reconciliation.sweepOnce();
+
+      expect(await isRearmed(ancient)).toBe(false);
+    });
+
+    it('ignores a workout that already reached a terminal status', async () => {
+      const settled = await agedWorkout(20 * 60_000, 'parsed');
+
+      await reconciliation.sweepOnce();
+
+      expect(await isRearmed(settled)).toBe(false);
+    });
+
+    it('re-publishes once per sweep, not once per replica', async () => {
+      const stuck = await agedWorkout(20 * 60_000);
+      await reconciliation.sweepOnce();
+      expect(await isRearmed(stuck)).toBe(true);
+
+      // Scoped to this row rather than to the sweep's return count: `outbox` is
+      // shared and the sweep legitimately sees every stuck workout in the
+      // database. What must hold is that an already-re-armed row is not
+      // selected again — which is what makes two API replicas safe with no lock
+      // clause, since the second UPDATE re-evaluates `published_at IS NOT NULL`
+      // after the first commits and matches nothing.
+      const before = (await ds.query(
+        `SELECT published_at, occurred_at FROM outbox WHERE payload->>'workout_id' = $1`,
+        [stuck],
+      )) as unknown[];
+      await reconciliation.sweepOnce();
+      const after = (await ds.query(
+        `SELECT published_at, occurred_at FROM outbox WHERE payload->>'workout_id' = $1`,
+        [stuck],
+      )) as unknown[];
+      expect(after).toEqual(before);
+    });
+
+    it('hands the re-armed event to the relay, which delivers it', async () => {
+      const stuck = await agedWorkout(20 * 60_000);
+      const [row] = (await ds.query(
+        `SELECT event_id FROM outbox WHERE payload->>'workout_id' = $1`,
+        [stuck],
+      )) as Array<{ event_id: string }>;
+
+      await reconciliation.sweepOnce();
+      await relay.sweepOnce();
+
+      // The two halves joined up: the sweep only re-arms, and the relay is what
+      // puts the event back on the exchange. Reading it off a bound queue is
+      // what makes that end-to-end rather than two services each reporting
+      // success to themselves.
+      //
+      // **Not asserted here: the workout reaching a terminal status.** That is
+      // the worker's half — it needs a live parser and an Anthropic call, so it
+      // belongs to quickstart scenario 1 (T049), not to a suite that must be
+      // deterministic.
+      expect(await isRearmed(stuck)).toBe(false);
+      expect(await waitForEvent('event_id', row.event_id)).toBe(true);
     });
   });
 });
