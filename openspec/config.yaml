@@ -103,4 +103,10 @@ operations:
 
   archive:
     guidance:
+      - "Do not archive unreviewed work. Confirm the openspec-apply-verifier
+         subagent has run and its findings are resolved, and that the change has
+         had a code review — /code-review for correctness and cleanup, plus
+         /security-review when it touches auth, secrets, uploads or anything
+         user-supplied. If either has not run, run it now: archiving is the last
+         point where acting on a finding is still cheap."
       - "Summarize what shipped and what was deferred before finishing."
