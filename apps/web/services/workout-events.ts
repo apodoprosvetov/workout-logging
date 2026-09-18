@@ -291,6 +291,36 @@ export function publishWorkoutLogged(workoutId: string, performedAt: string): vo
 }
 
 /**
+ * Call after PUT /workouts/:id succeeds. The edit screen navigates away to the
+ * workout it just saved; this is for everything else on screen — the lists and
+ * the volume chart, which would otherwise keep showing the workout as it was.
+ *
+ * Every field is what it is for a reason:
+ * - no date and no week, although the new date is known. An edit can move a
+ *   workout between weeks, and a named week reaches only the week it moved TO —
+ *   the view showing the week it LEFT would drop the announcement and keep
+ *   listing it. Null already means "may concern any week" to every consumer.
+ * - `local`, not `own-workout`: only a settle may move the dashboard's week
+ *   (FR-018), and a screen that jumped because the user saved an edit
+ *   elsewhere would be startling.
+ * - `changeType: null`: the in-flight surface skips what it does not recognise,
+ *   and naming a type here would claim a notification arrived when none did.
+ *
+ * Shaped identically to publishWorkoutDeleted, and deliberately its own
+ * function: the call sites say which happened, and the two need not stay the
+ * same if a consumer ever has to tell them apart.
+ */
+export function publishWorkoutEdited(): void {
+  publish({
+    origin: 'local',
+    changeType: null,
+    performedAt: null,
+    isoWeek: null,
+    settledStatus: null,
+  });
+}
+
+/**
  * Delivery resumed after a gap (FR-023) — an admission that a change may have
  * been missed, not a change itself. Redis keeps no backlog for an absent
  * listener (FR-027), so asking consumers to refetch is the whole recovery.

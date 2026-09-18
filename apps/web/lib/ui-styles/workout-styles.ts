@@ -21,6 +21,6 @@ export function statusBadgeClass(status: WorkoutStatus): string {
   return STATUS_BADGE_CLASS[status];
 }
 
-// Shared column track for the workout list: date | name | status | delete.
+// Shared column track for the workout list: date | name | status | edit | delete.
 // Applied to both the header row and every workout row so the columns line up.
-export const WORKOUT_ROW_GRID = 'grid grid-cols-[6.5rem_1fr_auto_2rem] items-center gap-3';
+export const WORKOUT_ROW_GRID = 'grid grid-cols-[6.5rem_1fr_auto_2rem_2rem] items-center gap-3';

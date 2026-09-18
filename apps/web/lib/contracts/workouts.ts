@@ -20,6 +20,13 @@ export type WorkoutStatus =
 export type WorkoutSource = 'web' | 'telegram';
 export type SetUnit = 'kg' | 'lb';
 
+// Which statuses `PUT /workouts/:id` accepts. Part of the contract, not a
+// display choice: three surfaces decide whether to offer editing, and a copy
+// that drifts would offer an edit the API refuses.
+export function isEditableStatus(status: WorkoutStatus): boolean {
+  return status === STATUS_PARSED || status === STATUS_NEEDS_REVIEW;
+}
+
 export interface WorkoutListItem {
   id: string;
   name: string | null;
@@ -52,4 +59,31 @@ export interface WorkoutDetail {
   source: WorkoutSource;
   performed_at: string;
   exercises: WorkoutExerciseItem[];
+}
+
+// `PUT /workouts/:id` — the whole desired end state of a workout, not the
+// operations that produce it.
+//
+// Deliberately NOT the read shapes above with `order` made optional: the
+// endpoint rejects a body carrying an explicit `order` for an exercise or a
+// set (forbidNonWhitelisted), so order must be expressible only as array
+// position. Separate types are what make sending one a type error.
+
+export interface ReplaceWorkoutSet {
+  weight: number;
+  reps: number;
+  unit: SetUnit;
+}
+
+export interface ReplaceWorkoutExercise {
+  name: string;
+  sets: ReplaceWorkoutSet[];
+}
+
+export interface ReplaceWorkoutRequest {
+  /** null clears the name; the endpoint stores null for an omitted one too. */
+  name: string | null;
+  /** ISO 8601 instant. */
+  performed_at: string;
+  exercises: ReplaceWorkoutExercise[];
 }

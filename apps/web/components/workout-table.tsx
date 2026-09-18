@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { type WorkoutListItem } from '@lib/contracts/workouts';
+import { isEditableStatus, type WorkoutListItem } from '@lib/contracts/workouts';
 import { formatPerformedAtShort } from '@lib/display/date-display';
 import { statusLabel } from '@lib/display/workout-display';
 import { statusBadgeClass, WORKOUT_ROW_GRID } from '@lib/ui-styles/workout-styles';
@@ -27,6 +27,7 @@ export function WorkoutTable({
         <span>Date</span>
         <span>Workout</span>
         <span>Status</span>
+        <span className="sr-only">Edit</span>
         <span className="sr-only">Delete</span>
       </div>
 
@@ -47,6 +48,20 @@ export function WorkoutTable({
           >
             {statusLabel(workout.status)}
           </span>
+          {/* The status condition lives here, not in the callers: both of them
+              happen to list only editable statuses today, and the next one
+              would break the rule silently. */}
+          {isEditableStatus(workout.status) ? (
+            <Link
+              href={`/workouts/edit?id=${workout.id}`}
+              aria-label={`Edit ${workout.name ?? 'workout'}`}
+              className="justify-self-end text-sm text-zinc-400 hover:text-black dark:hover:text-zinc-50"
+            >
+              ✎
+            </Link>
+          ) : (
+            <span />
+          )}
           <button
             type="button"
             onClick={() => onDelete(workout.id)}

@@ -98,6 +98,9 @@ operations:
          Postgres, Mongo, Redis and RabbitMQ."
       - "Comment only genuinely non-obvious logic, in 2-3 lines. Obvious code gets
          no comment."
+      - "In apps/web, one React component per file, and anything a single feature
+         owns lives in that feature's folder rather than in app-level lib/.
+         apps/web/CLAUDE.md has the layout and the two exceptions."
       - "Beyond the contract tests the tasks call for, leave quality polish
          (refactors, extra coverage, doc passes) out unless a task asks for it."
 

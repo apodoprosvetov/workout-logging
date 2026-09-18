@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
+import { FORM_INPUT } from '@lib/ui-styles/form-styles';
 import { login, register, type AuthFailure } from '@services/auth';
 
 interface AuthFormProps {
@@ -80,7 +81,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className={FORM_INPUT}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm font-medium text-zinc-700 dark:text-zinc-300">
@@ -92,7 +93,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className={FORM_INPUT}
             />
           </label>
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}

@@ -32,6 +32,35 @@ export function formatPerformedAtShort(iso: string): string {
   });
 }
 
+// The pair below is the input side of the same timezone question: an
+// `<input type="datetime-local">` holds a wall-clock string with no zone, while
+// performed_at is an instant. Both conversions go through the viewer's local
+// zone, matching the two formatters above that render a workout's date.
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** An ISO instant as an `<input type="datetime-local">` value, in local time. */
+export function toDateTimeLocal(iso: string): string {
+  const date = new Date(iso);
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+/**
+ * A `datetime-local` value back to an ISO instant.
+ *
+ * `new Date(local)` reads a zone-less string as local time, which is what the
+ * input means — appending a `Z` here would silently move the workout by the
+ * viewer's offset.
+ */
+export function fromDateTimeLocal(local: string): string {
+  return new Date(local).toISOString();
+}
+
 // `D Mon` (e.g. `10 Jun`) for a date, in UTC.
 export function formatDayMonth(date: Date): string {
   // en-GB orders day before month ("10 Jun"); en-US would give "Jun 10".
