@@ -1,8 +1,9 @@
 schema: spec-driven
 
 context: |
-  workout-logging — log workouts from free-text/photos. Telegram bot + web UI
-  on a NestJS API. npm-workspaces monorepo, Node >=22, TypeScript throughout.
+  workout-logging — log workouts from free-text/photos. Web UI on a NestJS API
+  (the Telegram bot was descoped in 2026-09; there is no bot and no inbound
+  webhook). npm-workspaces monorepo, Node >=22, TypeScript throughout.
 
     apps/api          NestJS 11 on Fastify, serves /api/*.
     apps/worker       RabbitMQ consumer.
