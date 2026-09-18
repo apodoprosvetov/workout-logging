@@ -24,3 +24,13 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+
+/* Tailwind v4's preflight leaves <button> at the browser default cursor, where
+   v3 set a pointer. Restore it here rather than per component. */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not(:disabled),
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+}

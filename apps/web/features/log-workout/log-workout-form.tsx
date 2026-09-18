@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
+import { FORM_INPUT } from '@lib/ui-styles/form-styles';
 import { ApiError } from '@services/api-client';
 import { publishWorkoutLogged } from '@services/workout-events';
 import { createWorkout } from '@services/workouts';
@@ -157,7 +158,7 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
         placeholder="Push day: bench press 80kg x8, x8, x6; overhead press 40kg x10, x10, x8"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+        className={FORM_INPUT}
       />
       <label htmlFor={dateId} className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
         Date (optional — defaults to today, or a date found in the text)
@@ -167,7 +168,7 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
         type="date"
         value={performedAt}
         onChange={(e) => setPerformedAt(e.target.value)}
-        className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+        className={`w-fit ${FORM_INPUT}`}
       />
       <input
         id={imageId}
@@ -176,7 +177,7 @@ export function LogWorkoutForm({ onLogged }: LogWorkoutFormProps) {
         accept={ACCEPTED_IMAGE_TYPES.join(',')}
         onChange={handleImageChange}
         ref={fileInputRef}
-        className="w-fit rounded-md border border-zinc-300 bg-white px-3 py-2 text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+        className={`w-fit ${FORM_INPUT}`}
       />
       <p className="text-sm text-zinc-500 dark:text-zinc-400">Log with text, photos, or both.</p>
       <p className="text-sm text-zinc-500 dark:text-zinc-400">

@@ -12,7 +12,12 @@
 
 import { ApiError, apiFetch, apiJson } from './api-client';
 
-import type { WorkoutDetail, WorkoutListResponse, WorkoutStatus } from '@lib/contracts/workouts';
+import type {
+  ReplaceWorkoutRequest,
+  WorkoutDetail,
+  WorkoutListResponse,
+  WorkoutStatus,
+} from '@lib/contracts/workouts';
 
 /**
  * Mirrors `GET /workouts` (contracts/api.md). Omitting `page`/`per_page` means
@@ -78,7 +83,7 @@ export async function createWorkout(body: FormData): Promise<CreatedWorkout> {
  */
 export async function getWorkout(id: string): Promise<WorkoutDetail | null> {
   try {
-    return await apiJson<WorkoutDetail>(`/workouts/${id}`);
+    return await apiJson<WorkoutDetail>(`/workouts/${encodeURIComponent(id)}`);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) return null;
     throw error;
@@ -86,11 +91,31 @@ export async function getWorkout(id: string): Promise<WorkoutDetail | null> {
 }
 
 /**
+ * PUT /workouts/:id — replaces the workout's editable content wholesale and
+ * resolves with its resulting state, in the same shape `getWorkout` returns.
+ *
+ * Every refusal throws ApiError (rule 4): a 400 carrying the exercise names
+ * that did not resolve, a 409 for a workout whose status no longer permits
+ * editing, a 404, a 503. Turning those into something a reader can act on is
+ * the edit form's job, not this module's.
+ */
+export async function replaceWorkout(
+  id: string,
+  body: ReplaceWorkoutRequest,
+): Promise<WorkoutDetail> {
+  return apiJson<WorkoutDetail>(`/workouts/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
  * DELETE /workouts/:id. **404 counts as success** — the caller's goal already
  * holds either way, and failing would make a double-click look like an error.
  */
 export async function deleteWorkout(id: string): Promise<void> {
-  const response = await apiFetch(`/workouts/${id}`, { method: 'DELETE' });
+  const response = await apiFetch(`/workouts/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (response.ok || response.status === 404) return;
 
   const body: unknown = await response.json().catch(() => undefined);

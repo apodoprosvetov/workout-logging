@@ -10,6 +10,7 @@ import { mongoUri, typeOrmDataSourceOptions } from '@workout-logging/shared';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { AuthModule } from './auth/auth.module';
 import { EventsModule } from './events/events.module';
+import { ExercisesModule } from './exercises/exercises.module';
 import { HealthModule } from './health/health.module';
 import { WorkoutsModule } from './workouts/workouts.module';
 
@@ -26,6 +27,7 @@ import { WorkoutsModule } from './workouts/workouts.module';
     HealthModule,
     AnalyticsModule,
     EventsModule,
+    ExercisesModule,
   ],
 })
 export class AppModule {}

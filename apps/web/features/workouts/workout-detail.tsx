@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
 import { useRequireAuth } from '@hooks/use-require-auth';
-import { type WorkoutDetail as WorkoutDetailData } from '@lib/contracts/workouts';
+import { isEditableStatus, type WorkoutDetail as WorkoutDetailData } from '@lib/contracts/workouts';
 import { formatPerformedAt } from '@lib/display/date-display';
 import { statusLabel } from '@lib/display/workout-display';
 import { statusBadgeClass } from '@lib/ui-styles/workout-styles';
@@ -81,10 +81,20 @@ export function WorkoutDetail({ id }: { id: string }) {
               {statusLabel(workout.status)}
             </span>
           </div>
-          <p className="text-sm text-zinc-500">
-            {formatPerformedAt(workout.performed_at)} ·{' '}
-            {workout.source === 'telegram' ? 'Telegram' : 'Web'}
-          </p>
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm text-zinc-500">
+              {formatPerformedAt(workout.performed_at)} ·{' '}
+              {workout.source === 'telegram' ? 'Telegram' : 'Web'}
+            </p>
+            {isEditableStatus(workout.status) && (
+              <Link
+                href={`/workouts/edit?id=${workout.id}`}
+                className="shrink-0 rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                Edit
+              </Link>
+            )}
+          </div>
 
           {workout.exercises.length === 0 && (
             <p className="text-sm text-zinc-500">
