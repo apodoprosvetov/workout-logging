@@ -86,6 +86,7 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
     amqpConnection = await connectRabbitMq();
     amqpChannel = await amqpConnection.createChannel();
 
+    await assertOutboxNotBacklogged();
     await assertNoCompetingRelay();
 
     // One queue of our own, bound to the exchange, shared by every block below.
@@ -163,6 +164,32 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
       }
     } finally {
       await ds.query(`DELETE FROM outbox WHERE event_id = $1`, [probeId]);
+    }
+  }
+
+  // Mirrors BATCH_SIZE in apps/api/src/events/outbox-relay.service.ts.
+  const RELAY_BATCH_SIZE = 50;
+
+  /**
+   * The sweep claims `ORDER BY occurred_at LIMIT 50`, so rows left behind by
+   * other suites can fill the batch before this spec's own row is reached — and
+   * the failure then reads "expected null to be a Date", which points nowhere
+   * near the cause. Refuse up front, as assertNoCompetingRelay does.
+   */
+  async function assertOutboxNotBacklogged(): Promise<void> {
+    const rows = (await ds.query(
+      `SELECT count(*)::int AS n FROM outbox WHERE published_at IS NULL`,
+    )) as Array<{ n: number }>;
+    const backlog = rows[0]?.n ?? 0;
+
+    if (backlog >= RELAY_BATCH_SIZE / 2) {
+      throw new Error(
+        `${backlog} unpublished outbox rows are already present and the relay claims only ` +
+          `${RELAY_BATCH_SIZE} per sweep, so this spec's own rows may never reach a batch. ` +
+          'A suite is leaving rows behind: deleteTestUsers clears them for its callers, so ' +
+          'the leak is in a spec that does not use it. Clear them with ' +
+          '`DELETE FROM outbox WHERE published_at IS NULL` and fix that teardown.',
+      );
     }
   }
 

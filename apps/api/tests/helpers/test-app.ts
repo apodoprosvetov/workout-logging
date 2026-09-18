@@ -113,6 +113,16 @@ export async function deleteTestUsers(emails: string[]): Promise<void> {
     'DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE email = ANY($1))',
     [emails],
   );
+  // Outbox rows have no FK to users — they carry the id inside the JSON payload,
+  // so nothing removes them on their own. The harness stops the relay, so a row
+  // a spec commits stays unpublished for good; enough of them fill
+  // OutboxRelayService's batch and outbox-relay.service.spec starts failing on
+  // rows that are not its own.
+  await ds.query(
+    `DELETE FROM outbox
+      WHERE payload->>'user_id' IN (SELECT id::text FROM users WHERE email = ANY($1))`,
+    [emails],
+  );
   await ds.query('DELETE FROM users WHERE email = ANY($1)', [emails]);
   await ds.destroy();
 }
