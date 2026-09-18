@@ -9,6 +9,7 @@ const NOTIFICATION_TYPES: ReadonlySet<NotificationType> = new Set([
   'workout.settled',
   'workout.created',
   'workout.deleted',
+  'workout.updated',
   'analytics.updated',
 ]);
 

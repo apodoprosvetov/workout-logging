@@ -13,12 +13,14 @@ export type SettledWorkoutStatus = Exclude<WorkoutStatus, WorkoutStatus.PENDING>
 export const WORKOUT_SETTLED_KEY = 'workout.settled';
 export const WORKOUT_CREATED_KEY = 'workout.created';
 export const WORKOUT_DELETED_KEY = 'workout.deleted';
+export const WORKOUT_UPDATED_KEY = 'workout.updated';
 export const ANALYTICS_UPDATED_KEY = 'analytics.updated';
 
 export type NotificationType =
   | typeof WORKOUT_SETTLED_KEY
   | typeof WORKOUT_CREATED_KEY
   | typeof WORKOUT_DELETED_KEY
+  | typeof WORKOUT_UPDATED_KEY
   | typeof ANALYTICS_UPDATED_KEY;
 
 // Every notification shares this shape. Field names are snake_case: this is a JSON
@@ -60,6 +62,19 @@ export interface WorkoutDeletedNotification extends NotificationPayload {
   performed_at: string; // ISO 8601, UTC
 }
 
+// Not a workout.settled: apps/web reads a settle as extraction completing (it
+// may move the dashboard's week and drains `loggedInThisTab`), and an edited
+// workout was never in flight.
+export interface WorkoutUpdatedNotification extends NotificationPayload {
+  type: typeof WORKOUT_UPDATED_KEY;
+  workout_id: string; // UUID
+  // No date on purpose. An edit can move a workout between weeks, and every
+  // week-scoped consumer drops a notification whose week is not the one on
+  // screen — a dashboard showing the week the workout LEFT would keep listing
+  // it. Carrying neither `performed_at` nor `iso_week` makes weekOf() null,
+  // which already means "may concern any week".
+}
+
 export interface AnalyticsUpdatedNotification extends NotificationPayload {
   type: typeof ANALYTICS_UPDATED_KEY;
   iso_week: string; // ISO key of the week that was updated, e.g. "2023-W01"
@@ -73,6 +88,7 @@ export type ChangeNotification =
   | WorkoutSettledNotification
   | WorkoutCreatedNotification
   | WorkoutDeletedNotification
+  | WorkoutUpdatedNotification
   | AnalyticsUpdatedNotification;
 
 // The channel format is defined here once, and read back here too — see

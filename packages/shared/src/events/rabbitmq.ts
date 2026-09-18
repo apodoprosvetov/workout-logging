@@ -6,6 +6,7 @@ import { config as loadEnv } from 'dotenv';
 import {
   WORKOUT_ANALYTICS_QUEUE,
   WORKOUT_DELETED_ROUTING_KEY,
+  WORKOUT_UPDATED_ROUTING_KEY,
   WORKOUT_DLQ,
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSE_QUEUE,
@@ -94,6 +95,10 @@ export async function setupRabbitMqTopology(channel: Channel): Promise<void> {
   await setupPrimaryQueue(channel, WORKOUT_PARSE_QUEUE, WORKOUT_UPLOADED_ROUTING_KEY);
   await setupPrimaryQueue(channel, WORKOUT_ANALYTICS_QUEUE, WORKOUT_PARSED_ROUTING_KEY);
   await bindPrimaryQueue(channel, WORKOUT_ANALYTICS_QUEUE, WORKOUT_DELETED_ROUTING_KEY);
+  // No wildcard binding here: an unbound key is confirmed and dropped (publish()
+  // sets no `mandatory`), the relay still marks it published, and the
+  // reconciliation sweep only covers pending uploads. Silently wrong analytics.
+  await bindPrimaryQueue(channel, WORKOUT_ANALYTICS_QUEUE, WORKOUT_UPDATED_ROUTING_KEY);
   // Final dead-letter queue — workers publish here directly once retries are exhausted.
   await channel.assertQueue(WORKOUT_DLQ, { durable: true });
 }

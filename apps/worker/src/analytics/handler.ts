@@ -14,6 +14,8 @@ import {
   WORKOUT_ANALYTICS_QUEUE,
   WorkoutDeletedEvent,
   WORKOUT_DELETED_ROUTING_KEY,
+  WorkoutUpdatedEvent,
+  WORKOUT_UPDATED_ROUTING_KEY,
 } from '@workout-logging/shared';
 
 import { log } from '../logger.js';
@@ -26,7 +28,7 @@ import type { ConsumeMessage } from 'amqplib';
 // activity. The apps/api read path recomputes from Postgres on a miss anyway.
 const WEEKLY_VOLUME_TTL_SECONDS = 120 * 24 * 60 * 60;
 
-type AnalyticsEvent = WorkoutParsedEvent | WorkoutDeletedEvent;
+type AnalyticsEvent = WorkoutParsedEvent | WorkoutDeletedEvent | WorkoutUpdatedEvent;
 
 // Discriminate on the body, never on msg.fields.routingKey. The retry tiers are
 // named per primary queue and dead-letter with
@@ -37,6 +39,10 @@ type AnalyticsEvent = WorkoutParsedEvent | WorkoutDeletedEvent;
 // acked without ever recomputing. Silent, permanent staleness.
 function isDeletion(event: AnalyticsEvent): event is WorkoutDeletedEvent {
   return (event as WorkoutDeletedEvent).type === WORKOUT_DELETED_ROUTING_KEY;
+}
+
+function isUpdate(event: AnalyticsEvent): event is WorkoutUpdatedEvent {
+  return (event as WorkoutUpdatedEvent).type === WORKOUT_UPDATED_ROUTING_KEY;
 }
 
 export function registerAnalyticsConsumer(context: WorkerContext): void {
@@ -56,6 +62,15 @@ async function handleMessage(context: WorkerContext, msg: ConsumeMessage): Promi
     if (isDeletion(event)) {
       // The week comes from the payload — the workout row no longer exists.
       await recomputeWeek(context, event.user_id, new Date(event.performed_at));
+    } else if (isUpdate(event)) {
+      // Both weeks, and the old one only from the payload: the row now carries
+      // the new date, so the week it left is no longer derivable from it.
+      const previous = new Date(event.previous_performed_at);
+      const current = new Date(event.performed_at);
+      await recomputeWeek(context, event.user_id, previous);
+      if (isoWeekKey(previous) !== isoWeekKey(current)) {
+        await recomputeWeek(context, event.user_id, current);
+      }
     } else {
       const workout = await context.dataSource.getRepository(Workout).findOne({
         where: { id: event.workout_id },

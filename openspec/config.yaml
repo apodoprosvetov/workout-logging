@@ -1,0 +1,112 @@
+schema: spec-driven
+
+context: |
+  workout-logging — log workouts from free-text/photos. Telegram bot + web UI
+  on a NestJS API. npm-workspaces monorepo, Node >=22, TypeScript throughout.
+
+    apps/api          NestJS 11 on Fastify, serves /api/*.
+    apps/worker       RabbitMQ consumer.
+    apps/web          Next.js 16 static export.
+    packages/shared   TypeORM entities, Mongoose schemas, DB clients, migrations.
+
+  Datastores: Postgres (TypeORM, relational core), MongoDB (Mongoose, raw
+  uploads/extractions), Redis (caches, rate limits), RabbitMQ (api -> worker).
+
+  Constraints that are easy to get wrong:
+  - apps/api runs as TWO replicas (api-1, api-2) behind Caddy round-robin. No
+    design may assume a request, a connection, or in-memory state belongs to a
+    particular replica, or that one replica can observe another's memory.
+    Durable shared state goes in Postgres or Redis; cross-replica fan-out goes
+    over Redis pub/sub. In-memory state is legitimate only when it is
+    per-replica by design and documented as such — the SSE connection
+    registry's per-replica connection cap is the existing precedent.
+  - apps/web is `output: 'export'` — a static bundle on S3 with NO server
+    runtime. Nothing may depend on SSR, server actions, route handlers or
+    middleware. Anything server-side goes in apps/api.
+  - apps/web reaches the backend only over HTTP (NEXT_PUBLIC_API_URL). It never
+    talks to Postgres, Mongo, Redis or RabbitMQ — it knows the HTTP contract and
+    nothing else. From packages/shared it may import TYPES only: a runtime
+    import drags the barrel's ioredis/amqplib/mongoose into the browser build
+    and breaks it with `Can't resolve 'dns'`.
+  - packages/shared is consumed as built `dist/`, not source. It must be built
+    before the apps, and after any change to it.
+  - Anything used by more than one app — entities, Mongoose schemas, migrations,
+    event types, wire payloads — lives in packages/shared and is imported, never
+    restated. A type that genuinely belongs to one app (JWT claims, UI callback
+    shapes) correctly stays local; composing shared types into a local union is
+    not restating them.
+  - Tests run against real docker-compose containers, not mocks or in-memory
+    fakes. `npm run docker:up` before `npm test`.
+  - Production secrets live in AWS SSM Parameter Store as SecureString under
+    /workout-logging/*, resolved into the environment at deploy time. No secret
+    may be committed, written to a file on the instance, or logged. The shared
+    logger does NOT redact anything: never hand it a connection string, a config
+    object or process.env, and watch `err` from the datastore clients — their
+    messages and stacks can carry the URI, password included.
+  - apps/api and apps/worker emit structured logs only — one JSON object per
+    line, {ts,level,svc,msg,...}. New log output MUST go through the existing
+    loggers, never a bare console.log. In apps/api BOTH Nest's `new Logger(ctx)`
+    (adapted by common/structured-logger.ts) and a direct logLine/createLogger
+    call are sanctioned — they converge on the same shared logger, so neither
+    needs replacing. apps/worker uses createLogger.
+  - apps/worker MUST NOT expose an HTTP surface — no server, no port, no health
+    endpoint. It runs as a single replica with nothing to load-balance, and gets
+    no PORT or JWT_SECRET. Reach for a queue or the JSON logs, not a probe.
+  - infra/terraform/ is applied by hand, never from CI.
+  - Conventional commits.
+
+  README.md has the production topology, deploy/rollback, logging and backups.
+
+rules:
+  proposal:
+    - "Name the affected workspaces explicitly (apps/api, apps/worker, apps/web,
+       packages/shared, infra) in the Impact section."
+    - "Flag in Impact when a change requires a TypeORM migration, a new SSM
+       parameter, or a Terraform apply — each needs a human step at deploy time."
+
+  specs:
+    - "Specify API behavior in terms of the HTTP contract — route, request shape,
+       status codes, error bodies — not NestJS controllers or services."
+    - "Cover the failure paths the system actually has: a datastore or RabbitMQ
+       being unreachable, duplicate delivery, and partial extraction results."
+
+  design:
+    - "When several viable approaches exist, lay out the trade-offs and give a
+       recommendation rather than silently picking one."
+    - "When a flow crosses several files, record the trigger -> method call
+       sequence so it can be carried into the code as a class comment."
+    - "State which datastore owns each piece of new state, and why, whenever a
+       change adds persistence."
+
+  tasks:
+    - "Every route exposed by apps/api MUST have a contract test under
+       apps/api/tests/contract/, added in the same change that adds the route.
+       Never deferred to a follow-up change."
+    - "A task that changes packages/shared must be followed by rebuilding it
+       before any task that consumes the change."
+    - "A task that changes a TypeORM entity must include generating and running
+       the migration."
+
+operations:
+  apply:
+    guidance:
+      - "For anything under infra/terraform/ or touching AWS directly, do not run
+         it — explain why the step is needed and give the exact commands, and let
+         the user run them. This is deliberate skill-building. Application code in
+         apps/ and packages/ is implemented normally."
+      - "Bring the containers up before running tests; the suites need real
+         Postgres, Mongo, Redis and RabbitMQ."
+      - "Comment only genuinely non-obvious logic, in 2-3 lines. Obvious code gets
+         no comment."
+      - "Beyond the contract tests the tasks call for, leave quality polish
+         (refactors, extra coverage, doc passes) out unless a task asks for it."
+
+  archive:
+    guidance:
+      - "Do not archive unreviewed work. Confirm the openspec-apply-verifier
+         subagent has run and its findings are resolved, and that the change has
+         had a code review — /code-review for correctness and cleanup, plus
+         /security-review when it touches auth, secrets, uploads or anything
+         user-supplied. If either has not run, run it now: archiving is the last
+         point where acting on a finding is still cheap."
+      - "Summarize what shipped and what was deferred before finishing."

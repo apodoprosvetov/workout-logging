@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { Exercise, ExerciseCatalogDocument, normalizeExerciseName } from '@workout-logging/shared';
+import { Exercise, resolveExerciseInCatalog } from '@workout-logging/shared';
 
 import type { Connection } from 'mongoose';
 import type { EntityManager } from 'typeorm';
@@ -25,13 +25,15 @@ export interface MatchResult {
 // (exercise-match.ts), so "Dumbbell Bench press incline" finds "Incline
 // Dumbbell Press". No match -> the exercise is still recorded (workout is not
 // blocked), using a slugified fallback — the caller flags needs_review.
+//
+// The lookup is shared with apps/api's edit path so both normalize names
+// identically; the upsert-on-miss below is this caller's own policy.
 export async function matchAndUpsertExercise(
   manager: EntityManager,
   mongoConnection: Connection,
   name: string,
 ): Promise<MatchResult> {
-  const catalog = mongoConnection.model<ExerciseCatalogDocument>('ExerciseCatalog');
-  const entry = await catalog.findOne({ normalized_aliases: normalizeExerciseName(name) });
+  const entry = await resolveExerciseInCatalog(mongoConnection, name);
 
   const slug = entry ? entry.slug : slugify(name);
   const canonicalName = entry ? entry.name : name;
