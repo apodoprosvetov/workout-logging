@@ -10,6 +10,7 @@ export const WORKOUT_ANALYTICS_QUEUE = 'workout.analytics.q';
 export const WORKOUT_DLQ = 'workout.dlq';
 
 export const WORKOUT_DELETED_ROUTING_KEY = 'workout.deleted';
+export const WORKOUT_UPDATED_ROUTING_KEY = 'workout.updated';
 
 // Published by apps/api once the pending workout + raw upload are persisted.
 export interface WorkoutUploadedEvent {
@@ -48,5 +49,20 @@ export interface WorkoutDeletedEvent {
   user_id: string;
   workout_id: string;
   performed_at: string; // ISO 8601, UTC
+  occurred_at: string;
+}
+
+// Published by apps/api after an edit, so the analytics worker can recompute
+// both weeks it touches. `previous_performed_at` has to travel in the payload:
+// after the commit the row reports only the new date, so the week the workout
+// left is no longer derivable — same problem WorkoutDeletedEvent solves.
+export interface WorkoutUpdatedEvent {
+  // In the body, not the routing key — see WorkoutDeletedEvent above.
+  type: 'workout.updated';
+  event_id: string;
+  user_id: string;
+  workout_id: string;
+  previous_performed_at: string; // ISO 8601, UTC — the week being left
+  performed_at: string; // ISO 8601, UTC — the week being joined
   occurred_at: string;
 }

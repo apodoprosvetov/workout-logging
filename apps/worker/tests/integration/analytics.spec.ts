@@ -27,6 +27,7 @@ import {
   WORKOUT_DELETED_ROUTING_KEY,
   WORKOUT_EVENTS_EXCHANGE,
   WORKOUT_PARSED_ROUTING_KEY,
+  WORKOUT_UPDATED_ROUTING_KEY,
 } from '@workout-logging/shared';
 
 import { registerAnalyticsConsumer } from '../../src/analytics/handler.js';
@@ -169,6 +170,30 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
           user_id: userId,
           workout_id: workoutId,
           exercise_count: 1,
+          occurred_at: new Date().toISOString(),
+        }),
+      ),
+      { persistent: true },
+    );
+  }
+
+  function publishUpdated(
+    workoutId: string,
+    previousPerformedAt: string,
+    performedAt: string,
+    routingKey: string = WORKOUT_UPDATED_ROUTING_KEY,
+  ): void {
+    channel.publish(
+      WORKOUT_EVENTS_EXCHANGE,
+      routingKey,
+      Buffer.from(
+        JSON.stringify({
+          type: 'workout.updated',
+          event_id: randomUUID(),
+          user_id: userId,
+          workout_id: workoutId,
+          previous_performed_at: previousPerformedAt,
+          performed_at: performedAt,
           occurred_at: new Date().toISOString(),
         }),
       ),
@@ -329,6 +354,119 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
 
     // The deletion, wearing the routing key a retry hop would have given it.
     publishDeleted(id, performedAt, WORKOUT_PARSED_ROUTING_KEY);
+    await new Promise((r) => setTimeout(r, 900));
+
+    const after = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
+    expect(after).toBe(before - 200);
+  }, 15000);
+
+  // The binding, asserted against the broker rather than by reading the queue:
+  // the dev worker consumes from it too, so a `channel.get` here would be a race
+  // it usually loses. A missing binding is confirmed and dropped by the exchange
+  // (publish sets no `mandatory`), so nothing else would ever report it.
+  it('has workout.updated bound to workout.analytics.q', async () => {
+    const url = new URL(process.env.RABBITMQ_URL as string);
+    const api = `http://${url.hostname}:15672/api/queues/%2F/${WORKOUT_ANALYTICS_QUEUE}/bindings`;
+    const auth = Buffer.from(
+      `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`,
+    ).toString('base64');
+
+    const res = await fetch(api, { headers: { authorization: `Basic ${auth}` } });
+    expect(res.ok).toBe(true);
+    const bindings = (await res.json()) as Array<{ source: string; routing_key: string }>;
+
+    expect(
+      bindings.some(
+        (b) => b.source === WORKOUT_EVENTS_EXCHANGE && b.routing_key === WORKOUT_UPDATED_ROUTING_KEY,
+      ),
+    ).toBe(true);
+  });
+
+  it('recomputes both weeks when an edit moves the workout across a week boundary', async () => {
+    const from = '2026-05-06T00:00:00.000Z'; // 2026-W19
+    const to = '2026-05-13T00:00:00.000Z'; // 2026-W20
+    const toWeek = isoWeekKey(new Date(to));
+    const id = await seedParsedWorkout(from, [
+      { slug: 'barbell-curl', sets: [{ weight: 30, reps: 10 }] }, // biceps +300
+    ]);
+    publishParsed(id);
+    await new Promise((r) => setTimeout(r, 800));
+
+    const fromBefore = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).biceps);
+    expect(fromBefore).toBeGreaterThanOrEqual(300);
+
+    await dataSource.query('UPDATE workouts SET performed_at = $1 WHERE id = $2', [to, id]);
+    publishUpdated(id, from, to);
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const fromAfter = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).biceps || 0);
+    const toAfter = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, toWeek))).biceps || 0);
+
+    expect(fromAfter).toBe(fromBefore - 300); // the week it left
+    expect(toAfter).toBe(300); // the week it joined
+
+    await redis.del(weeklyVolumeRedisKey(userId, toWeek));
+  }, 20000);
+
+  it('recomputes the one week when an edit stays inside it', async () => {
+    const at = '2026-05-07T00:00:00.000Z'; // 2026-W19
+    const id = await seedParsedWorkout(at, [
+      { slug: 'standing-calf-raise', sets: [{ weight: 50, reps: 10 }] }, // calves +500
+    ]);
+    publishParsed(id);
+    await new Promise((r) => setTimeout(r, 800));
+    const before = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).calves);
+
+    // Same week, heavier: 50x10 -> 60x10, so +100 on the week.
+    await dataSource.query(
+      `UPDATE sets SET weight = 60 WHERE workout_exercise_id IN
+         (SELECT id FROM workout_exercises WHERE workout_id = $1)`,
+      [id],
+    );
+    publishUpdated(id, at, at);
+    await new Promise((r) => setTimeout(r, 1000));
+
+    expect(Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).calves)).toBe(
+      before + 100,
+    );
+  }, 20000);
+
+  it('is idempotent: the same update delivered twice leaves the same figures', async () => {
+    const at = '2026-05-08T00:00:00.000Z'; // 2026-W19
+    const id = await seedParsedWorkout(at, [
+      { slug: 'lateral-raise', sets: [{ weight: 10, reps: 10 }] }, // shoulders +100
+    ]);
+    publishParsed(id);
+    await new Promise((r) => setTimeout(r, 800));
+
+    publishUpdated(id, at, at);
+    await new Promise((r) => setTimeout(r, 900));
+    const once = await redis.hgetall(weeklyVolumeRedisKey(userId, week));
+
+    publishUpdated(id, at, at);
+    await new Promise((r) => setTimeout(r, 900));
+    const twice = await redis.hgetall(weeklyVolumeRedisKey(userId, week));
+
+    expect(twice).toEqual(once);
+  }, 20000);
+
+  it('still handles an update that arrives under the workout.parsed routing key (post-retry)', async () => {
+    // Same regression as the deletion case above: a retry hop rewrites the
+    // routing key to workout.parsed. Down the parsed branch this would recompute
+    // only the week the row now reports, leaving the week it left overstated.
+    const previousPerformedAt = '2026-05-05T00:00:00.000Z'; // Tue of 2026-W19, the week under test
+    const movedTo = '2026-06-16T00:00:00.000Z'; // a different ISO week
+    const id = await seedParsedWorkout(previousPerformedAt, [
+      { slug: 'lateral-raise', sets: [{ weight: 20, reps: 10 }] }, // shoulders +200
+    ]);
+    publishParsed(id);
+    await new Promise((r) => setTimeout(r, 800));
+    const before = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);
+
+    // Move it out of the week, exactly as replaceById's transaction would.
+    await dataSource.query('UPDATE workouts SET performed_at = $1 WHERE id = $2', [movedTo, id]);
+
+    publishUpdated(id, previousPerformedAt, movedTo, WORKOUT_PARSED_ROUTING_KEY);
     await new Promise((r) => setTimeout(r, 900));
 
     const after = Number((await redis.hgetall(weeklyVolumeRedisKey(userId, week))).shoulders);

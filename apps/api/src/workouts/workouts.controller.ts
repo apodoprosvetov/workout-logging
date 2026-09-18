@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -18,6 +19,7 @@ import { WorkoutSource } from '@workout-logging/shared';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateWorkoutDto } from './dto/create-workout.dto';
 import { ListWorkoutsQueryDto } from './dto/list-workouts-query.dto';
+import { ReplaceWorkoutDto } from './dto/replace-workout.dto';
 import { IngestRateLimitGuard } from './ingest-rate-limit.guard';
 import { IngestionService } from './ingestion.service';
 import { WorkoutsService } from './workouts.service';
@@ -57,6 +59,17 @@ export class WorkoutsController {
   @Get(':id')
   async getById(@Req() req: AuthenticatedRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.workoutsService.getById(req.userId, id);
+  }
+
+  // PUT, not PATCH: getById exposes no exercise or set ids, so there is nothing
+  // to address an individual one with.
+  @Put(':id')
+  async replace(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReplaceWorkoutDto,
+  ) {
+    return this.workoutsService.replaceById(req.userId, id, dto);
   }
 
   @Delete(':id')
