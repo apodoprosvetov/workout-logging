@@ -83,7 +83,7 @@ export async function createWorkout(body: FormData): Promise<CreatedWorkout> {
  */
 export async function getWorkout(id: string): Promise<WorkoutDetail | null> {
   try {
-    return await apiJson<WorkoutDetail>(`/workouts/${id}`);
+    return await apiJson<WorkoutDetail>(`/workouts/${encodeURIComponent(id)}`);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) return null;
     throw error;
@@ -103,7 +103,7 @@ export async function replaceWorkout(
   id: string,
   body: ReplaceWorkoutRequest,
 ): Promise<WorkoutDetail> {
-  return apiJson<WorkoutDetail>(`/workouts/${id}`, {
+  return apiJson<WorkoutDetail>(`/workouts/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -115,7 +115,7 @@ export async function replaceWorkout(
  * holds either way, and failing would make a double-click look like an error.
  */
 export async function deleteWorkout(id: string): Promise<void> {
-  const response = await apiFetch(`/workouts/${id}`, { method: 'DELETE' });
+  const response = await apiFetch(`/workouts/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (response.ok || response.status === 404) return;
 
   const body: unknown = await response.json().catch(() => undefined);

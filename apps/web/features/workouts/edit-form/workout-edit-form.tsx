@@ -127,6 +127,10 @@ export function WorkoutEditForm({ id }: { id: string }) {
 
       <form
         className="flex flex-col gap-6"
+        // validateEditorState is the only judge. Left on, native constraint
+        // validation blocks submit before save() runs, so a weight off the
+        // step becomes a browser tooltip instead of a message at the field.
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
           void save();

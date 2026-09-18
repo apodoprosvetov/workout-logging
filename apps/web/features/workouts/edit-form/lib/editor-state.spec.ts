@@ -8,6 +8,7 @@ import {
   MAX_EXERCISES,
   MAX_NAME_LENGTH,
   MAX_SETS_PER_EXERCISE,
+  MAX_WEIGHT_DECIMALS,
   toEditorState,
   toReplacePayload,
   validateEditorState,
@@ -212,39 +213,31 @@ describe('validateEditorState', () => {
     });
   });
 
-  it('refuses a weight written in exponent notation with too many decimals', () => {
+  it.each([
+    // A number input accepts exponent notation, which has no '.' to split on.
+    ['exponent notation with too many decimals', '1e-3'],
+    ['more decimals than the API stores', '80.125'],
+  ])('refuses %s', (_label, weight) => {
     const state = validState();
     const set = state.exercises[0].sets[0];
-    // A number input accepts this, and it has no '.' to count decimals with.
-    set.weight = '1e-3';
+    set.weight = weight;
 
     expect(validateEditorState(state)).toContainEqual({
       at: 'set',
       exerciseId: state.exercises[0].id,
       setId: set.id,
-      message: 'Weight takes at most 2 decimal places.',
+      message: `Weight takes at most ${MAX_WEIGHT_DECIMALS} decimal places.`,
     });
   });
 
-  it('accepts weights the API does store', () => {
+  // Including weights the spinner arrows cannot reach: they are typed, not
+  // stepped, and the API stores them.
+  it('accepts every weight the API stores', () => {
     const state = validState();
-    for (const weight of ['0', '80', '82.5', '82.55', '1e2']) {
+    for (const weight of ['0', '80', '82.5', '82.25', '82.55', '100', '1e2']) {
       state.exercises[0].sets[0].weight = weight;
       expect(validateEditorState(state)).toEqual([]);
     }
-  });
-
-  it('refuses a weight with more decimals than the API stores', () => {
-    const state = validState();
-    const set = state.exercises[0].sets[0];
-    set.weight = '80.125';
-
-    expect(validateEditorState(state)).toContainEqual({
-      at: 'set',
-      exerciseId: state.exercises[0].id,
-      setId: set.id,
-      message: 'Weight takes at most 2 decimal places.',
-    });
   });
 
   it('refuses an unusable date', () => {
@@ -261,6 +254,17 @@ describe('validateEditorState', () => {
 
     expect(validateEditorState(state)).toContainEqual({
       at: 'name',
+      message: `Keep the name under ${MAX_NAME_LENGTH} characters.`,
+    });
+  });
+
+  it('refuses an exercise name longer than the API stores', () => {
+    const state = validState();
+    state.exercises[0].name = 'x'.repeat(MAX_NAME_LENGTH + 1);
+
+    expect(validateEditorState(state)).toContainEqual({
+      at: 'exercise',
+      exerciseId: state.exercises[0].id,
       message: `Keep the name under ${MAX_NAME_LENGTH} characters.`,
     });
   });

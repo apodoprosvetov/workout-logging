@@ -50,6 +50,10 @@ export interface EditorState {
 export const MAX_NAME_LENGTH = 200;
 export const MAX_EXERCISES = 50;
 export const MAX_SETS_PER_EXERCISE = 100;
+// What the spinner arrows move by — plate maths, not a limit. Typing a weight
+// the arrows cannot reach is fine: the form sets `noValidate`, so this never
+// decides what may be saved. MAX_WEIGHT_DECIMALS does, and it mirrors the API.
+export const WEIGHT_INCREMENT = 0.5;
 export const MAX_WEIGHT_DECIMALS = 2;
 
 let rowSequence = 0;

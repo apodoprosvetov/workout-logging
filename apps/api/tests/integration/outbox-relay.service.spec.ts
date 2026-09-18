@@ -177,6 +177,13 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
    * near the cause. Refuse up front, as assertNoCompetingRelay does.
    */
   async function assertOutboxNotBacklogged(): Promise<void> {
+    // Counts every unpublished row, not only stale ones. The relay sweeps
+    // `ORDER BY occurred_at LIMIT 50`, so a sibling suite's perfectly healthy
+    // in-flight rows sort ahead of this suite's just as a leak would, and
+    // starve it the same way — measured: with the window narrowed to stale
+    // rows only, "leaves the event unpublished when the broker does not
+    // acknowledge" failed in the full run with `expected null to be a Date`,
+    // which is the very failure this check exists to translate.
     const rows = (await ds.query(
       `SELECT count(*)::int AS n FROM outbox WHERE published_at IS NULL`,
     )) as Array<{ n: number }>;
@@ -186,9 +193,12 @@ describe('OutboxRelayService (integration, real Postgres + RabbitMQ)', () => {
       throw new Error(
         `${backlog} unpublished outbox rows are already present and the relay claims only ` +
           `${RELAY_BATCH_SIZE} per sweep, so this spec's own rows may never reach a batch. ` +
-          'A suite is leaving rows behind: deleteTestUsers clears them for its callers, so ' +
-          'the leak is in a spec that does not use it. Clear them with ' +
-          '`DELETE FROM outbox WHERE published_at IS NULL` and fix that teardown.',
+          'Two causes, and they need different fixes: rows from a run that has finished mean ' +
+          'a suite is leaking (deleteTestUsers clears them for its callers, so the leak is in ' +
+          'a spec that does not use it) — clear those with `DELETE FROM outbox WHERE ' +
+          "published_at IS NULL AND occurred_at < now() - interval '10 minutes'`. Rows from " +
+          'the last minute are a sibling suite still working; re-run rather than deleting ' +
+          'them, or the deletion takes rows that suite is about to assert on.',
       );
     }
   }

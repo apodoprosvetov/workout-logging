@@ -4,6 +4,7 @@ import { type SetUnit } from '@lib/contracts/workouts';
 import { FORM_INPUT, ICON_BUTTON } from '@lib/ui-styles/form-styles';
 
 import { FieldProblems } from './field-problems';
+import { WEIGHT_INCREMENT } from './lib/editor-state';
 
 import type { EditorSet } from './lib/editor-state';
 
@@ -33,7 +34,9 @@ export function SetRow({
         <input
           type="number"
           inputMode="decimal"
-          step="1"
+          // Half-kilo jumps for the arrows only — 0.01 would need 500 clicks
+          // for 5kg. The form sets noValidate, so a typed 82.25 still saves.
+          step={String(WEIGHT_INCREMENT)}
           min="0"
           value={set.weight}
           onChange={(event) => onChange({ ...set, weight: event.target.value })}
