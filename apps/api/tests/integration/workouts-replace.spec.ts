@@ -61,7 +61,9 @@ describe('PUT /workouts/:id (integration: outbox + notification)', () => {
   }
 
   async function outboxRowsFor(workoutId: string) {
-    const rows = await ds.getRepository(OutboxEvent).find({ where: { routingKey: 'workout.updated' } });
+    const rows = await ds
+      .getRepository(OutboxEvent)
+      .find({ where: { routingKey: 'workout.updated' } });
     return rows.filter((r) => (r.payload as { workout_id: string }).workout_id === workoutId);
   }
 

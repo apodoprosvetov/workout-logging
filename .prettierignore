@@ -23,3 +23,10 @@ next-env.d.ts
 # 2026-09-17 and both directories went with it. A replacement SDD harness will
 # want its own spec directory added back to this list.
 docs/specs-archive/
+
+# OpenSpec, adopted 2026-09-17 — the replacement the note above anticipated.
+# Same reasoning: proposals, designs and specs are the design record, and
+# rewrapping their prose changes the wording without improving anything.
+# config.yaml is here too: its `context` is a block scalar whose line breaks
+# are content.
+openspec/

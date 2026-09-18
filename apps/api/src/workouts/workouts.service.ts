@@ -275,7 +275,9 @@ export class WorkoutsService {
 
       const exerciseRepository = manager.getRepository(Exercise);
       for (const [index, submitted] of dto.exercises.entries()) {
-        const entry = resolutions[index].entry as NonNullable<(typeof resolutions)[number]['entry']>;
+        const entry = resolutions[index].entry as NonNullable<
+          (typeof resolutions)[number]['entry']
+        >;
 
         // `exercises` mirrors only the catalog entries some workout has used, so
         // a first use has no row yet.

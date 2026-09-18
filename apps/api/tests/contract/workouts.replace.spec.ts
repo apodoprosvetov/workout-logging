@@ -95,7 +95,9 @@ describe('PUT /workouts/:id (contract)', () => {
     // The harness stops the relay, so every outbox row these tests commit stays
     // unpublished. Left behind they accumulate across runs and eventually fill
     // OutboxRelayService's 50-row batch, which breaks outbox-relay.service.spec.
-    await ds.query("DELETE FROM outbox WHERE payload->>'user_id' = ANY($1)", [[userId, otherUserId]]);
+    await ds.query("DELETE FROM outbox WHERE payload->>'user_id' = ANY($1)", [
+      [userId, otherUserId],
+    ]);
     await ds.destroy();
     await app.close();
   });
@@ -105,7 +107,10 @@ describe('PUT /workouts/:id (contract)', () => {
       const id = await seedWorkout(userId);
       await put(id, validBody()).expect(200);
 
-      const res = await put(id, validBody({ name: 'Renamed', performed_at: '2026-04-10T00:00:00.000Z' }));
+      const res = await put(
+        id,
+        validBody({ name: 'Renamed', performed_at: '2026-04-10T00:00:00.000Z' }),
+      );
       expect(res.status).toBe(200);
       expect(res.body.name).toBe('Renamed');
       expect(res.body.performed_at).toBe('2026-04-10T00:00:00.000Z');
@@ -115,20 +120,26 @@ describe('PUT /workouts/:id (contract)', () => {
 
     it('adds, removes and reorders exercises in one request', async () => {
       const id = await seedWorkout(userId);
-      await put(id, validBody({
-        exercises: [
-          { name: PRESS, sets: [{ weight: 80, reps: 5, unit: 'kg' }] },
-          { name: INCLINE, sets: [{ weight: 30, reps: 8, unit: 'kg' }] },
-        ],
-      })).expect(200);
+      await put(
+        id,
+        validBody({
+          exercises: [
+            { name: PRESS, sets: [{ weight: 80, reps: 5, unit: 'kg' }] },
+            { name: INCLINE, sets: [{ weight: 30, reps: 8, unit: 'kg' }] },
+          ],
+        }),
+      ).expect(200);
 
       // Drop bench, keep incline, and put a new one ahead of it.
-      const res = await put(id, validBody({
-        exercises: [
-          { name: 'dumbbell bench press', sets: [{ weight: 40, reps: 6, unit: 'kg' }] },
-          { name: INCLINE, sets: [{ weight: 32.5, reps: 8, unit: 'kg' }] },
-        ],
-      }));
+      const res = await put(
+        id,
+        validBody({
+          exercises: [
+            { name: 'dumbbell bench press', sets: [{ weight: 40, reps: 6, unit: 'kg' }] },
+            { name: INCLINE, sets: [{ weight: 32.5, reps: 8, unit: 'kg' }] },
+          ],
+        }),
+      );
 
       expect(res.status).toBe(200);
       expect(res.body.exercises.map((e: { name: string }) => e.name)).toEqual([
@@ -140,26 +151,36 @@ describe('PUT /workouts/:id (contract)', () => {
 
     it('adds, removes, reorders and edits sets within an exercise', async () => {
       const id = await seedWorkout(userId);
-      await put(id, validBody({
-        exercises: [{
-          name: PRESS,
-          sets: [
-            { weight: 60, reps: 10, unit: 'kg' },
-            { weight: 80, reps: 5, unit: 'kg' },
-            { weight: 90, reps: 3, unit: 'kg' },
+      await put(
+        id,
+        validBody({
+          exercises: [
+            {
+              name: PRESS,
+              sets: [
+                { weight: 60, reps: 10, unit: 'kg' },
+                { weight: 80, reps: 5, unit: 'kg' },
+                { weight: 90, reps: 3, unit: 'kg' },
+              ],
+            },
           ],
-        }],
-      })).expect(200);
+        }),
+      ).expect(200);
 
-      const res = await put(id, validBody({
-        exercises: [{
-          name: PRESS,
-          sets: [
-            { weight: 100, reps: 2, unit: 'lb' }, // new, first
-            { weight: 85, reps: 5, unit: 'kg' }, // edited weight
+      const res = await put(
+        id,
+        validBody({
+          exercises: [
+            {
+              name: PRESS,
+              sets: [
+                { weight: 100, reps: 2, unit: 'lb' }, // new, first
+                { weight: 85, reps: 5, unit: 'kg' }, // edited weight
+              ],
+            },
           ],
-        }],
-      }));
+        }),
+      );
 
       expect(res.status).toBe(200);
       expect(res.body.exercises[0].sets).toEqual([
@@ -173,12 +194,21 @@ describe('PUT /workouts/:id (contract)', () => {
       // writes 1-based. A 0-based edit would make the same workout read "0,1,2"
       // after a round-trip through PUT.
       const id = await seedWorkout(userId);
-      const res = await put(id, validBody({
-        exercises: [
-          { name: PRESS, sets: [{ weight: 80, reps: 5, unit: 'kg' }, { weight: 85, reps: 3, unit: 'kg' }] },
-          { name: INCLINE, sets: [{ weight: 30, reps: 8, unit: 'kg' }] },
-        ],
-      }));
+      const res = await put(
+        id,
+        validBody({
+          exercises: [
+            {
+              name: PRESS,
+              sets: [
+                { weight: 80, reps: 5, unit: 'kg' },
+                { weight: 85, reps: 3, unit: 'kg' },
+              ],
+            },
+            { name: INCLINE, sets: [{ weight: 30, reps: 8, unit: 'kg' }] },
+          ],
+        }),
+      );
       expect(res.status).toBe(200);
       expect(res.body.exercises.map((e: { order: number }) => e.order)).toEqual([1, 2]);
       expect(res.body.exercises[0].sets.map((x: { order: number }) => x.order)).toEqual([1, 2]);
@@ -222,8 +252,9 @@ describe('PUT /workouts/:id (contract)', () => {
       const id = await seedWorkout(userId, WorkoutStatus.PARSED, '2026-04-07T00:00:00.000Z');
       await put(id, validBody({ performed_at: '2026-05-19T00:00:00.000Z' })).expect(200);
 
-      const rows = (await ds.getRepository(OutboxEvent).find({ where: { routingKey: 'workout.updated' } }))
-        .filter((r) => (r.payload as { workout_id: string }).workout_id === id);
+      const rows = (
+        await ds.getRepository(OutboxEvent).find({ where: { routingKey: 'workout.updated' } })
+      ).filter((r) => (r.payload as { workout_id: string }).workout_id === id);
 
       expect(rows).toHaveLength(1);
       expect(rows[0].payload).toMatchObject({
@@ -261,13 +292,16 @@ describe('PUT /workouts/:id (contract)', () => {
 
     it('400 naming every exercise that is not in the catalog', async () => {
       const id = await seedWorkout(userId);
-      const res = await put(id, validBody({
-        exercises: [
-          { name: 'zzz not a real lift', sets: [{ weight: 1, reps: 1, unit: 'kg' }] },
-          { name: PRESS, sets: [{ weight: 80, reps: 5, unit: 'kg' }] },
-          { name: 'yyy also not real', sets: [{ weight: 1, reps: 1, unit: 'kg' }] },
-        ],
-      }));
+      const res = await put(
+        id,
+        validBody({
+          exercises: [
+            { name: 'zzz not a real lift', sets: [{ weight: 1, reps: 1, unit: 'kg' }] },
+            { name: PRESS, sets: [{ weight: 80, reps: 5, unit: 'kg' }] },
+            { name: 'yyy also not real', sets: [{ weight: 1, reps: 1, unit: 'kg' }] },
+          ],
+        }),
+      );
 
       expect(res.status).toBe(400);
       // Every miss, not just the first — a caller fixes them in one pass.
@@ -306,9 +340,12 @@ describe('PUT /workouts/:id (contract)', () => {
 
     it('400 for an explicit order field, which the body must not carry', async () => {
       const id = await seedWorkout(userId);
-      const res = await put(id, validBody({
-        exercises: [{ name: PRESS, order: 3, sets: [{ weight: 80, reps: 5, unit: 'kg' }] }],
-      }));
+      const res = await put(
+        id,
+        validBody({
+          exercises: [{ name: PRESS, order: 3, sets: [{ weight: 80, reps: 5, unit: 'kg' }] }],
+        }),
+      );
       expect(res.status).toBe(400);
     });
   });
@@ -318,9 +355,11 @@ describe('PUT /workouts/:id (contract)', () => {
       const id = await seedWorkout(userId);
       const connection = app.get<Connection>(getConnectionToken());
       const model = connection.model('ExerciseCatalog');
-      const find = vi.spyOn(model, 'find').mockImplementation(
-        () => ({ lean: () => Promise.reject(new Error('mongo is down')) }) as never,
-      );
+      const find = vi
+        .spyOn(model, 'find')
+        .mockImplementation(
+          () => ({ lean: () => Promise.reject(new Error('mongo is down')) }) as never,
+        );
 
       try {
         const res = await put(id, validBody());
@@ -336,8 +375,18 @@ describe('PUT /workouts/:id (contract)', () => {
 
   describe('a refused request changes nothing', () => {
     it.each([
-      ['an unknown exercise', () => validBody({ exercises: [{ name: 'zzz not real', sets: [{ weight: 1, reps: 1, unit: 'kg' }] }] })],
-      ['an invalid set', () => validBody({ exercises: [{ name: PRESS, sets: [{ weight: -5, reps: 1, unit: 'kg' }] }] })],
+      [
+        'an unknown exercise',
+        () =>
+          validBody({
+            exercises: [{ name: 'zzz not real', sets: [{ weight: 1, reps: 1, unit: 'kg' }] }],
+          }),
+      ],
+      [
+        'an invalid set',
+        () =>
+          validBody({ exercises: [{ name: PRESS, sets: [{ weight: -5, reps: 1, unit: 'kg' }] }] }),
+      ],
       ['no exercises', () => validBody({ exercises: [] })],
     ])('leaves the workout untouched after %s', async (_label, body) => {
       const id = await seedWorkout(userId, WorkoutStatus.NEEDS_REVIEW, '2026-04-07T00:00:00.000Z');
@@ -361,8 +410,10 @@ describe('PUT /workouts/:id (contract)', () => {
       const catalog = connection.model('ExerciseCatalog');
       const name = `invented lift ${randomUUID()}`;
 
-      await put(id, validBody({ exercises: [{ name, sets: [{ weight: 1, reps: 1, unit: 'kg' }] }] }))
-        .expect(400);
+      await put(
+        id,
+        validBody({ exercises: [{ name, sets: [{ weight: 1, reps: 1, unit: 'kg' }] }] }),
+      ).expect(400);
 
       expect(await catalog.countDocuments({ name })).toBe(0);
     });

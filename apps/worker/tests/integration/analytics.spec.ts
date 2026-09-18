@@ -377,7 +377,8 @@ describe('analytics worker (integration: Postgres + MongoDB + RabbitMQ + Redis)'
 
     expect(
       bindings.some(
-        (b) => b.source === WORKOUT_EVENTS_EXCHANGE && b.routing_key === WORKOUT_UPDATED_ROUTING_KEY,
+        (b) =>
+          b.source === WORKOUT_EVENTS_EXCHANGE && b.routing_key === WORKOUT_UPDATED_ROUTING_KEY,
       ),
     ).toBe(true);
   });
